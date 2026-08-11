@@ -1,0 +1,60 @@
+# ======================================================================
+# RK3568-Gateway .gitignore
+# 仓库根目录: ~/RK3568-Gateway  (edgegw 是网关模块子目录)
+# ======================================================================
+
+# ---------- 构建产物 ----------
+build/
+cmake-build-*/
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.exe
+
+# ---------- 交叉编译 / 固件镜像 (一律不提交, 体积大且可重新生成) ----------
+*.img
+*.elf
+*.bin
+*.dtb
+*.dtbo
+
+# ---------- 日志 & 数据库 ----------
+*.log
+data/logs/*
+!data/logs/.gitkeep
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+
+# ---------- Qt 工程产物 ----------
+build-*/
+debug/
+release/
+Makefile
+Makefile.Debug
+Makefile.Release
+.qmake.stash
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+*.pro.user
+
+# ---------- 配置 (含 WiFi 密码 / 板子 IP 等敏感信息) ----------
+# 真实配置不提交, 只提交 *.example.yaml 作为模板
+config/*.yaml
+!config/*.example.yaml
+
+# ---------- IDE / 系统 ----------
+.vscode/
+.vscode-server/
+.idea/
+*.swp
+*~
+Thumbs.db
+.DS_Store
+compile_commands.json
+.clangd
