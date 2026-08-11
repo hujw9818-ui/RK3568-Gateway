@@ -5,7 +5,6 @@
 // 这个类只负责 MQTT 传输，不负责解析 JSON，也不负责写数据库。
 
 #include <mosquitto.h>
-
 #include <atomic>
 #include <cstdint>
 #include <functional>

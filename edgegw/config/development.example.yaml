@@ -1,0 +1,19 @@
+name: edgegw
+env: development
+
+mqtt:
+  host: 192.168.1.100
+  port: 1883
+  client_id: edgegw-dev
+  clean_session: true
+
+web:
+  host: 0.0.0.0
+  port: 8080
+
+serial:
+  device: /dev/ttyS3
+  baudrate: 115200
+
+logging:
+  level: info
