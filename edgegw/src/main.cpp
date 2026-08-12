@@ -63,13 +63,13 @@ void HandleSensorMessage(const edgegw::device::SensorData& data) {
                                  " msg=" + data.msg_id +
                                  " ts=" + std::to_string(data.ts));
     if (data.has_temp)
-        edgegw::logger::Logger::Info("    temp=" + std::to_string(data.temp));
+        edgegw::logger::Logger::Debug("    temp=" + std::to_string(data.temp));
     if (data.has_humi)
-        edgegw::logger::Logger::Info("    humi=" + std::to_string(data.humi));
+        edgegw::logger::Logger::Debug("    humi=" + std::to_string(data.humi));
     if (data.has_light)
-        edgegw::logger::Logger::Info("    light=" + std::to_string(data.light));
+        edgegw::logger::Logger::Debug("    light=" + std::to_string(data.light));
     if (data.has_ir)
-        edgegw::logger::Logger::Info("    ir=" + std::to_string(data.ir));
+        edgegw::logger::Logger::Debug("    ir=" + std::to_string(data.ir));
 }
 
 // ------------------------------------------------------------------
