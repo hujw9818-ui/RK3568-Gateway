@@ -61,8 +61,12 @@ void HttpHandler(struct mg_connection* c, int ev, void* ev_data) {
         return;
     }
 
-    // 其他 → 404
-    mg_http_reply(c, 404, "Content-Type: application/json\r\n", "{\"error\":\"not_found\"}");
+    // 其他 → 静态文件服务 (www/ 目录, 前端页面)
+    // 例如: GET / → www/index.html
+    struct mg_http_serve_opts opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.root_dir = "www";
+    mg_http_serve_dir(c, hm, &opts);
 }
 
 }  // namespace
