@@ -67,3 +67,7 @@ compile_commands.json
 # ---------- 缓存目录 ----------
 .cache/
 edgegw/.cache/
+
+# Gateway local runtime configuration
+edgegw/config/*.yaml
+!edgegw/config/*.example.yaml
