@@ -3,17 +3,22 @@
 //
 // 启动流程:
 //   1. 加载 YAML 配置 (ConfigManager)
-//   2. 初始化 MQTT 客户端, 订阅 iotgw/v1/dev/+/report
-//   3. 主循环: 轮询 MQTT, 收到消息 → JSON 解析 → 打印/存设备表
+//   2. 初始化 SQLite (SqliteStore)
+//   3. 初始化 MQTT 客户端, 订阅 iotgw/v1/dev/+/report
+//   4. 主循环: 等待退出信号
+//
+// 数据处理:
+//   MQTT 收到消息 → OnMqttMessage → HandleSensorMessage
+//     → 设备状态表更新 + SQLite 历史存储 + 打印
 //
 // 用法: ./edgegw config/development.yaml
 // ======================================================================
 #include "config/config_manager.hpp"
+#include "database/sqlite_store.hpp"
+#include "device/device_registry.hpp"
 #include "device/json_parser.hpp"
 #include "device/sensor_data.hpp"
-#include "device/device_registry.hpp"
 #include "mqtt/mqtt_client.hpp"
-
 
 #include <cstdio>
 #include <csignal>
@@ -25,8 +30,46 @@ volatile std::sig_atomic_t g_running = 1;
 
 void OnSignal(int /*sig*/) { g_running = 0; }
 
-// 全局设备状态表 (MQTT 线程和主线程共享, 内部有锁保护)
-edgegw::device::DeviceRegistry g_registry;
+// 全局状态 (模块间共享, 各自内部有锁保护)
+edgegw::device::DeviceRegistry g_registry;   // 设备状态表(内存)
+edgegw::database::SqliteStore g_db;          // 历史数据库(磁盘)
+
+// ------------------------------------------------------------------
+// 处理一条解析成功的传感器数据
+// 职责: 更新设备状态表 + 写入历史数据库 + 打印调试
+// ------------------------------------------------------------------
+void HandleSensorMessage(const edgegw::device::SensorData& data) {
+    // 1. 更新设备状态表 (最新值)
+    g_registry.UpdateSensor(data);
+
+    // 2. 写入历史数据库 (每条记录)
+    g_db.InsertTelemetry(data);
+
+    // 3. 打印调试信息
+    std::printf("[mqtt] dev=%s type=%s msg=%s ts=%lld\n",
+                data.dev_id.c_str(), data.type.c_str(),
+                data.msg_id.c_str(), static_cast<long long>(data.ts));
+    if (data.has_temp) std::printf("        temp=%.1f\n", data.temp);
+    if (data.has_humi) std::printf("        humi=%.1f\n", data.humi);
+    if (data.has_light) std::printf("        light=%.1f\n", data.light);
+    if (data.has_ir) std::printf("        ir=%.1f\n", data.ir);
+    std::printf("[registry] %s\n", g_registry.ToJson().c_str());
+}
+
+// ------------------------------------------------------------------
+// MQTT 消息回调入口
+// 职责: 解析 JSON → 分发到数据处理
+// ------------------------------------------------------------------
+void OnMqttMessage(const edgegw::mqtt::Message& message) {
+    edgegw::device::SensorData data;
+    if (!edgegw::device::ParseSensorJson(message.payload, data)) {
+        std::printf("[mqtt] 解析失败, topic=%s payload=%.80s\n",
+                    message.topic.c_str(), message.payload.c_str());
+        return;
+    }
+    HandleSensorMessage(data);
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -45,35 +88,20 @@ int main(int argc, char* argv[]) {
     const int mqtt_port = cfg.GetInt("mqtt.port", 1883);
     const std::string mqtt_client_id =
         cfg.GetString("mqtt.client_id", "edgegw");
-    std::printf("[main] MQTT 配置: %s:%d (%s)\n", mqtt_host.c_str(),
-                mqtt_port, mqtt_client_id.c_str());
+    const std::string db_path =
+        cfg.GetString("database.path", "data/edgegw.db");
+    std::printf("[main] MQTT: %s:%d (%s)  DB: %s\n", mqtt_host.c_str(),
+                mqtt_port, mqtt_client_id.c_str(), db_path.c_str());
 
-    // ---------- 2. 初始化 MQTT ----------
+    // ---------- 2. 初始化数据库 ----------
+    if (!g_db.Init(db_path)) {
+        std::printf("[main] 数据库初始化失败\n");
+        return 1;
+    }
+
+    // ---------- 3. 初始化 MQTT ----------
     edgegw::mqtt::MqttClient mqtt;
-
-    mqtt.SetMessageHandler([](const edgegw::mqtt::Message& message) {
-        // 收到消息 → 解析 JSON
-        edgegw::device::SensorData data;
-        if (!edgegw::device::ParseSensorJson(message.payload, data)) {
-            std::printf("[mqtt] 解析失败, topic=%s payload=%.80s\n",
-                        message.topic.c_str(), message.payload.c_str());
-            return;
-        }
-
-        // 解析成功 → 打印(暂时代替设备表/数据库)
-         g_registry.UpdateSensor(data);
-
-        std::printf("[mqtt] dev=%s type=%s msg=%s ts=%lld\n",
-                    data.dev_id.c_str(), data.type.c_str(),
-                    data.msg_id.c_str(), static_cast<long long>(data.ts));
-        if (data.has_temp) std::printf("        temp=%.1f\n", data.temp);
-        if (data.has_humi) std::printf("        humi=%.1f\n", data.humi);
-        if (data.has_light) std::printf("        light=%.1f\n", data.light);
-        if (data.has_ir) std::printf("        ir=%.1f\n", data.ir);
-        // 打印当前状态表内容 (验证 ToJson)
-        std::printf("[registry] %s\n", g_registry.ToJson().c_str());
-    
-    });
+    mqtt.SetMessageHandler(OnMqttMessage);
 
     edgegw::mqtt::MqttClient::Options mqtt_options;
     mqtt_options.host = mqtt_host;
@@ -84,11 +112,9 @@ int main(int argc, char* argv[]) {
         std::printf("[main] MQTT 启动失败\n");
         return 1;
     }
-
-    // 订阅设备上报主题
     mqtt.Subscribe("iotgw/v1/dev/+/report", 0);
 
-    // ---------- 3. 主循环 ----------
+    // ---------- 4. 主循环 ----------
     std::signal(SIGINT, OnSignal);
     std::signal(SIGTERM, OnSignal);
 
@@ -97,15 +123,15 @@ int main(int argc, char* argv[]) {
         // MQTT 是后台线程, 主循环只需等待退出信号
         // 后续这里会加: Web 服务轮询 / 串口轮询 / 心跳日志
         if (g_running) {
-            // 每 100ms 醒来一次检查退出信号
-            // 用简单的忙等代替 sleep, 保证信号响应及时
             volatile int spin = 0;
             for (int i = 0; i < 1000000; ++i) { spin += i; }
         }
     }
 
+    // ---------- 5. 退出清理 ----------
     std::printf("[main] 正在退出...\n");
     mqtt.Stop();
+    g_db.Close();
     std::printf("[main] 退出完成\n");
     return 0;
 }
