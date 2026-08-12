@@ -11,7 +11,9 @@
 #include "config/config_manager.hpp"
 #include "device/json_parser.hpp"
 #include "device/sensor_data.hpp"
+#include "device/device_registry.hpp"
 #include "mqtt/mqtt_client.hpp"
+
 
 #include <cstdio>
 #include <csignal>
@@ -23,6 +25,8 @@ volatile std::sig_atomic_t g_running = 1;
 
 void OnSignal(int /*sig*/) { g_running = 0; }
 
+// 全局设备状态表 (MQTT 线程和主线程共享, 内部有锁保护)
+edgegw::device::DeviceRegistry g_registry;
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -57,6 +61,8 @@ int main(int argc, char* argv[]) {
         }
 
         // 解析成功 → 打印(暂时代替设备表/数据库)
+         g_registry.UpdateSensor(data);
+
         std::printf("[mqtt] dev=%s type=%s msg=%s ts=%lld\n",
                     data.dev_id.c_str(), data.type.c_str(),
                     data.msg_id.c_str(), static_cast<long long>(data.ts));
@@ -64,6 +70,9 @@ int main(int argc, char* argv[]) {
         if (data.has_humi) std::printf("        humi=%.1f\n", data.humi);
         if (data.has_light) std::printf("        light=%.1f\n", data.light);
         if (data.has_ir) std::printf("        ir=%.1f\n", data.ir);
+        // 打印当前状态表内容 (验证 ToJson)
+        std::printf("[registry] %s\n", g_registry.ToJson().c_str());
+    
     });
 
     edgegw::mqtt::MqttClient::Options mqtt_options;
