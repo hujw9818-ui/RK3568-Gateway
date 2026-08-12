@@ -5,17 +5,19 @@
 //   1. 加载 YAML 配置 (ConfigManager)
 //   2. 初始化 SQLite (SqliteStore)
 //   3. 初始化 MQTT 客户端, 订阅 iotgw/v1/dev/+/report
-//   4. 启动 Web 服务 (Mongoose REST API)
-//   5. 主循环: Poll Web + 等待退出信号
+//   4. 启动 Web 服务 (Mongoose REST API, :8080)
+//   5. 启动 WebSocket 推送 (:8082)
+//   6. 主循环: Poll Web/WS + 等待退出信号
 //
 // 数据处理:
 //   MQTT 收到消息 → OnMqttMessage → HandleSensorMessage
-//     → 设备状态表更新 + SQLite 历史存储 + 打印
+//     → 设备状态表更新 + SQLite 历史存储 + WebSocket 广播
 //
 // Web 接口:
 //   GET  /api/health   → 健康检查
 //   GET  /api/status   → 设备最新状态 (registry)
 //   POST /api/control  → 下发控制命令 (mqtt)
+//   WS   :8082         → 实时推送设备数据 (Web/Qt 同步)
 //
 // 用法: ./edgegw config/development.yaml
 // ======================================================================
@@ -26,6 +28,7 @@
 #include "device/sensor_data.hpp"
 #include "mqtt/mqtt_client.hpp"
 #include "web/web_server.hpp"
+#include "web/websocket_server.hpp"
 
 #include <cstdio>
 #include <csignal>
@@ -42,11 +45,12 @@ edgegw::device::DeviceRegistry g_registry;   // 设备状态表(内存)
 edgegw::database::SqliteStore g_db;          // 历史数据库(磁盘)
 edgegw::mqtt::MqttClient g_mqtt;             // MQTT 客户端(Web要发命令)
 edgegw::web::WebContext g_web_ctx;           // Web 上下文(依赖注入)
-edgegw::web::WebServer g_web;                // Web 服务
+edgegw::web::WebServer g_web;                // Web 服务 (HTTP REST)
+edgegw::web::WebSocketServer g_ws;           // WebSocket 推送
 
 // ------------------------------------------------------------------
 // 处理一条解析成功的传感器数据
-// 职责: 更新设备状态表 + 写入历史数据库 + 打印调试
+// 职责: 更新设备状态表 + 写入历史数据库 + WebSocket 推送 + 打印
 // ------------------------------------------------------------------
 void HandleSensorMessage(const edgegw::device::SensorData& data) {
     // 1. 更新设备状态表 (最新值)
@@ -55,7 +59,10 @@ void HandleSensorMessage(const edgegw::device::SensorData& data) {
     // 2. 写入历史数据库 (每条记录)
     g_db.InsertTelemetry(data);
 
-    // 3. 打印调试信息
+    // 3. WebSocket 推送 (数据变化实时推给 Web/Qt 实现双端同步)
+    g_ws.Broadcast(g_registry.ToJson());
+
+    // 4. 打印调试信息
     std::printf("[mqtt] dev=%s type=%s msg=%s ts=%lld\n",
                 data.dev_id.c_str(), data.type.c_str(),
                 data.msg_id.c_str(), static_cast<long long>(data.ts));
@@ -102,9 +109,11 @@ int main(int argc, char* argv[]) {
         cfg.GetString("database.path", "data/edgegw.db");
     const std::string web_host = cfg.GetString("web.host", "0.0.0.0");
     const int web_port = cfg.GetInt("web.port", 8080);
-    std::printf("[main] MQTT: %s:%d (%s)  DB: %s  Web: %s:%d\n",
+    const int ws_port = cfg.GetInt("web.ws_port", 8082);
+    std::printf("[main] MQTT: %s:%d (%s)  DB: %s  Web: %s:%d  WS: %s:%d\n",
                 mqtt_host.c_str(), mqtt_port, mqtt_client_id.c_str(),
-                db_path.c_str(), web_host.c_str(), web_port);
+                db_path.c_str(), web_host.c_str(), web_port,
+                web_host.c_str(), ws_port);
 
     // ---------- 2. 初始化数据库 ----------
     if (!g_db.Init(db_path)) {
@@ -135,7 +144,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // ---------- 5. 主循环 ----------
+    // ---------- 5. 启动 WebSocket 推送 ----------
+    const std::string ws_addr = web_host + ":" + std::to_string(ws_port);
+    if (!g_ws.Start(ws_addr)) {
+        std::printf("[main] WebSocket 启动失败\n");
+        return 1;
+    }
+
+    // ---------- 6. 主循环 ----------
     std::signal(SIGINT, OnSignal);
     std::signal(SIGTERM, OnSignal);
 
@@ -143,6 +159,7 @@ int main(int argc, char* argv[]) {
     while (g_running) {
         // Web 服务事件轮询 (处理 HTTP 请求)
         g_web.Poll(50);
+        g_ws.Poll(50);
 
         // 检查退出信号 (简单忙等)
         if (g_running) {
@@ -151,8 +168,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // ---------- 6. 退出清理 ----------
+    // ---------- 7. 退出清理 ----------
     std::printf("[main] 正在退出...\n");
+    g_ws.Stop();
     g_web.Stop();
     g_mqtt.Stop();
     g_db.Close();
