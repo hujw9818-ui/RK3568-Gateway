@@ -28,12 +28,16 @@
 namespace edgegw {
 namespace web {
 
+// 前置声明 (避免循环包含)
+class WebSocketServer;
+
 // 传给 Mongoose 回调的上下文 (依赖注入)
 struct WebContext {
     device::DeviceRegistry* registry = nullptr;
     mqtt::MqttClient* mqtt = nullptr;
     camera::CameraManager* camera = nullptr;
     std::string* transport = nullptr;   // 当前通讯方式
+    class WebSocketServer* ws = nullptr;   // 状态更新后推送
 };
 
 // Web 服务类: 封装 Mongoose 生命周期

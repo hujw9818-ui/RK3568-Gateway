@@ -29,6 +29,7 @@
 #include "web/websocket_server.hpp"
 
 #include <csignal>
+#include <unistd.h>
 #include <string>
 
 namespace {
@@ -174,6 +175,7 @@ int main(int argc, char* argv[]) {
     g_web_ctx.mqtt = &g_mqtt;
     g_web_ctx.camera = &g_camera;
     g_web_ctx.transport = &g_transport;
+    g_web_ctx.ws = &g_ws;
     if (!g_web.Start(web_addr, &g_web_ctx)) {
         edgegw::logger::Logger::Error("[main] Web 服务启动失败");
         return 1;
@@ -196,11 +198,9 @@ int main(int argc, char* argv[]) {
         g_web.Poll(50);
         g_ws.Poll(50);
 
-        // 检查退出信号 (简单忙等)
-        if (g_running) {
-            volatile int spin = 0;
-            for (int i = 0; i < 1000000; ++i) { spin += i; }
-        }
+        // 休眠 50ms, 让出 CPU (忙等会占满一个核)
+        // 信号会打断休眠, 退出响应仍然及时
+        usleep(50000);
     }
 
     // ---------- 9. 退出清理 ----------

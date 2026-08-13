@@ -146,10 +146,21 @@ bool CameraManager::Spawn(const std::string& cmd, pid_t* pid) {
 bool CameraManager::StopProcess(pid_t* pid, const char* label) {
     if (*pid <= 0) return true;
     if (IsAlive(*pid)) {
+        // SIGINT 优雅停止, 等 5 秒 (gst 拆管道 + rkisp STREAMOFF 需要时间)
         kill(*pid, SIGINT);
-        for (int i = 0; i < 20 && IsAlive(*pid); ++i) usleep(100000);
-        if (IsAlive(*pid)) kill(*pid, SIGKILL);
-        // 阻塞等待子进程完全退出 (回收僵尸, 释放设备)
+        for (int i = 0; i < 50 && IsAlive(*pid); ++i) usleep(100000);
+        if (IsAlive(*pid)) {
+            // 还活着: SIGTERM 再等 2 秒
+            kill(*pid, SIGTERM);
+            for (int i = 0; i < 20 && IsAlive(*pid); ++i) usleep(100000);
+        }
+        if (IsAlive(*pid)) {
+            // 最后手段: SIGKILL (有风险, 会弄脏 rkisp 状态)
+            logger::Logger::Warn(
+                std::string("[camera] ") + label +
+                " 未优雅退出, SIGKILL (可能导致设备状态异常)");
+            kill(*pid, SIGKILL);
+        }
         int status = 0;
         waitpid(*pid, &status, 0);
     }
@@ -193,6 +204,7 @@ bool CameraManager::Start() {
             " ! video/x-raw,format=NV12,width=" + std::to_string(width_) +
             ",height=" + std::to_string(height_) +
             ",framerate=" + std::to_string(framerate_) + "/1" +
+            " ! videoflip method=counterclockwise" +
             " ! mppjpegenc ! multifilesink location=" + FramePath() +
             " max-files=1 post-messages=false";
         if (!Spawn(pipeline_retry, &stream_pid_)) return false;
@@ -289,6 +301,7 @@ std::string CameraManager::TakeSnapshotBase64() {
             " num-buffers=1 ! video/x-raw,format=NV12,width=" +
             std::to_string(width_) + ",height=" + std::to_string(height_) +
             ",framerate=" + std::to_string(framerate_) + "/1" +
+            " ! videoflip method=counterclockwise" +
             " ! mppjpegenc ! filesink location=" + tmp;
         std::string cmd = std::string("/bin/sh -c \"") + pipeline + "\"";
         bool snap_ok = (std::system(cmd.c_str()) == 0);
@@ -337,6 +350,7 @@ std::string CameraManager::StartRecord() {
         " ! video/x-raw,format=NV12,width=" + std::to_string(width_) +
         ",height=" + std::to_string(height_) +
         ",framerate=" + std::to_string(framerate_) + "/1" +
+        " ! videoflip method=counterclockwise" +
         " ! mpph264enc ! h264parse ! mp4mux faststart=true" +
         " ! filesink location=" + path;
 

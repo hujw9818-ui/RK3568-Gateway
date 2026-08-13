@@ -15,6 +15,10 @@ namespace device {
 // 成功返回 true, 失败返回 false(不抛异常)
 bool ParseSensorJson(const std::string& payload, SensorData& out);
 
+// 解析控制命令 (cmd 消息的 target/action/params), 填入执行器字段
+// 用于网关"乐观更新": 下发命令时同步更新状态表
+bool ParseCommandJson(const std::string& payload, SensorData& out);
+
 }  // namespace device
 }  // namespace edgegw
 

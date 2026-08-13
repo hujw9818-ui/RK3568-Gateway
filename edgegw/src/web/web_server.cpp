@@ -3,6 +3,9 @@
 // 含 MJPEG 流推帧 (multipart/x-mixed-replace, 浏览器 <img> 直接看)
 // ======================================================================
 #include "web/web_server.hpp"
+#include "web/websocket_server.hpp"
+
+#include "device/json_parser.hpp"
 
 #include <mongoose.h>
 
@@ -65,7 +68,22 @@ void HttpHandler(struct mg_connection* c, int ev, void* ev_data) {
         }
         const std::string topic = "iotgw/v1/dev/mcu01/cmd";
         std::string payload(hm->body.buf, hm->body.len);
+
+        // ① 下发命令到 MQTT
         bool ok = ctx->mqtt->Publish(topic, payload, 1);
+
+        // ② 乐观更新: 解析命令 → 更新状态表 (前端立即同步)
+        if (ok && ctx->registry != nullptr) {
+            edgegw::device::SensorData cmd;
+            if (edgegw::device::ParseCommandJson(payload, cmd)) {
+                ctx->registry->UpdateSensor(cmd);
+                // ③ WS 推送最新状态 (前端控件实时变化)
+                if (ctx->ws != nullptr) {
+                    ctx->ws->Broadcast(ctx->registry->ToJson());
+                }
+            }
+        }
+
         mg_http_reply(c, ok ? 200 : 500, "Content-Type: application/json\r\n",
                       ok ? "{\"ok\":true}" : "{\"ok\":false}");
         return;

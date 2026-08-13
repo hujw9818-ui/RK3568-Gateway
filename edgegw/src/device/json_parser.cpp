@@ -125,5 +125,47 @@ bool ParseSensorJson(const std::string& payload, SensorData& out) {
     return true;
 }
 
+// 解析控制命令, 填入执行器字段 (乐观更新用)
+bool ParseCommandJson(const std::string& payload, SensorData& out) {
+    rapidjson::Document doc;
+    doc.Parse(payload.data(), payload.size());
+    if (doc.HasParseError() || !doc.IsObject()) return false;
+
+    GetString(doc, "type", out.type);
+    GetString(doc, "dev", out.dev_id);
+    GetString(doc, "msg_id", out.msg_id);
+    GetInt64(doc, "ts", out.ts);
+
+    auto body_it = doc.FindMember("body");
+    if (body_it == doc.MemberEnd() || !body_it->value.IsObject()) return false;
+    const rapidjson::Value& body = body_it->value;
+
+    std::string target;
+    if (!GetString(body, "target", target)) return false;
+
+    auto params_it = body.FindMember("params");
+    if (params_it == body.MemberEnd() || !params_it->value.IsObject()) return false;
+    const rapidjson::Value& params = params_it->value;
+
+    int v = 0;
+    if (target == "led") {
+        if (GetInt(params, "on", v)) { out.led_on = (v != 0); out.has_led = true; }
+        if (GetInt(params, "brightness", v)) {
+            out.led_brightness = v; out.has_led_br = true;
+        }
+    } else if (target == "fan") {
+        if (GetInt(params, "on", v)) { out.fan_on = (v != 0); out.has_fan = true; }
+        if (GetInt(params, "speed", v)) { out.fan_speed = v; out.has_fan_speed = true; }
+        if (GetInt(params, "dir", v)) { out.fan_dir = v; out.has_fan_dir = true; }
+    } else if (target == "servo") {
+        if (GetInt(params, "angle", v)) { out.servo_angle = v; out.has_servo = true; }
+    } else if (target == "beep") {
+        if (GetInt(params, "on", v)) { out.beep_on = (v != 0); out.has_beep = true; }
+    } else {
+        return false;   // 未知 target
+    }
+    return true;
+}
+
 }  // namespace device
 }  // namespace edgegw
