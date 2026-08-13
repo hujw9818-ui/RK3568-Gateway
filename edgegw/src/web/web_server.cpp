@@ -6,6 +6,7 @@
 #include <mongoose.h>
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 namespace edgegw {
@@ -16,6 +17,12 @@ namespace {
 // 从 Mongoose 连接取回上下文 (userdata 模式)
 WebContext* GetContext(struct mg_connection* c) {
     return static_cast<WebContext*>(c->fn_data);
+}
+
+// 检查请求方法是否为 POST
+bool IsPost(const struct mg_http_message* hm) {
+    // Mongoose 7.15: 用 mg_strcmp 比较 mg_str (mg_vcmp 不存在)
+    return mg_strcmp(hm->method, mg_str("POST")) == 0;
 }
 
 // ------------------------------------------------------------
@@ -52,17 +59,101 @@ void HttpHandler(struct mg_connection* c, int ev, void* ev_data) {
                           "{\"ok\":false,\"error\":\"mqtt_not_ready\"}");
             return;
         }
-        // 简单解析: 从 body 提取 target 和 on 字段 (完整解析后续用 rapidjson)
-        // 直接把原始 body 转发给设备 (TODO: 正式解析)
+        // 选择通讯方式: MQTT 走 broker, Zigbee 走串口
+        // 当前先统一走 MQTT, Zigbee 串口模块后续接入
         const std::string topic = "iotgw/v1/dev/mcu01/cmd";
-        bool ok = ctx->mqtt->Publish(topic, std::string(hm->body.buf, hm->body.len), 1);
+        std::string payload(hm->body.buf, hm->body.len);
+        bool ok = ctx->mqtt->Publish(topic, payload, 1);
         mg_http_reply(c, ok ? 200 : 500, "Content-Type: application/json\r\n",
                       ok ? "{\"ok\":true}" : "{\"ok\":false}");
         return;
     }
 
+    // ---------- 摄像头接口 ----------
+    // GET /api/camera/status
+    if (mg_match(hm->uri, mg_str("/api/camera/status"), nullptr)) {
+        if (ctx->camera == nullptr) {
+            mg_http_reply(c, 503, "Content-Type: application/json\r\n",
+                          "{\"ok\":false,\"error\":\"camera_not_ready\"}");
+            return;
+        }
+        auto st = ctx->camera->GetStatus();
+        mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                      "{\"recording\":%s,\"record_file\":\"%s\",\"last_snapshot\":\"%s\"}",
+                      st.recording ? "true" : "false",
+                      st.record_file.c_str(), st.last_snapshot.c_str());
+        return;
+    }
+
+    // POST /api/camera/snapshot
+    if (mg_match(hm->uri, mg_str("/api/camera/snapshot"), nullptr)) {
+        if (ctx->camera == nullptr || !IsPost(hm)) {
+            mg_http_reply(c, 503, "Content-Type: application/json\r\n",
+                          "{\"ok\":false,\"error\":\"camera_not_ready\"}");
+            return;
+        }
+        std::string path = ctx->camera->TakeSnapshot();
+        if (path.empty()) {
+            mg_http_reply(c, 500, "Content-Type: application/json\r\n",
+                          "{\"ok\":false,\"error\":\"snapshot_failed\"}");
+            return;
+        }
+        mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                      "{\"ok\":true,\"path\":\"%s\"}", path.c_str());
+        return;
+    }
+
+    // POST /api/camera/start_record
+    if (mg_match(hm->uri, mg_str("/api/camera/start_record"), nullptr)) {
+        if (ctx->camera == nullptr || !IsPost(hm)) {
+            mg_http_reply(c, 503, "Content-Type: application/json\r\n",
+                          "{\"ok\":false,\"error\":\"camera_not_ready\"}");
+            return;
+        }
+        std::string path = ctx->camera->StartRecord();
+        if (path.empty()) {
+            mg_http_reply(c, 500, "Content-Type: application/json\r\n",
+                          "{\"ok\":false,\"error\":\"record_start_failed\"}");
+            return;
+        }
+        mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                      "{\"ok\":true,\"path\":\"%s\"}", path.c_str());
+        return;
+    }
+
+    // POST /api/camera/stop_record
+    if (mg_match(hm->uri, mg_str("/api/camera/stop_record"), nullptr)) {
+        if (ctx->camera == nullptr || !IsPost(hm)) {
+            mg_http_reply(c, 503, "Content-Type: application/json\r\n",
+                          "{\"ok\":false,\"error\":\"camera_not_ready\"}");
+            return;
+        }
+        bool ok = ctx->camera->StopRecord();
+        mg_http_reply(c, ok ? 200 : 500, "Content-Type: application/json\r\n",
+                      ok ? "{\"ok\":true}" : "{\"ok\":false}");
+        return;
+    }
+
+    // ---------- 通讯方式切换 ----------
+    // POST /api/transport  body: {"transport":"mqtt"} 或 {"transport":"zigbee"}
+    if (mg_match(hm->uri, mg_str("/api/transport"), nullptr)) {
+        if (ctx->transport == nullptr || !IsPost(hm)) {
+            mg_http_reply(c, 400, "Content-Type: application/json\r\n",
+                          "{\"ok\":false,\"error\":\"bad_request\"}");
+            return;
+        }
+        std::string body(hm->body.buf, hm->body.len);
+        if (body.find("\"zigbee\"") != std::string::npos) {
+            *ctx->transport = "zigbee";
+        } else {
+            *ctx->transport = "mqtt";
+        }
+        mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                      "{\"ok\":true,\"transport\":\"%s\"}", ctx->transport->c_str());
+        return;
+    }
+
     // 其他 → 静态文件服务 (www/ 目录, 前端页面)
-    // 例如: GET / → www/index.html
     struct mg_http_serve_opts opts;
     memset(&opts, 0, sizeof(opts));
     opts.root_dir = "www";

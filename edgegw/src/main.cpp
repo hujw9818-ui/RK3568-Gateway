@@ -5,10 +5,11 @@
 //   1. 加载 YAML 配置 (ConfigManager)
 //   2. 初始化日志系统 (Logger)
 //   3. 初始化 SQLite (SqliteStore)
-//   4. 初始化 MQTT 客户端, 订阅 iotgw/v1/dev/+/report
-//   5. 启动 Web 服务 (Mongoose REST API, :8080)
-//   6. 启动 WebSocket 推送 (:8082)
-//   7. 主循环: Poll Web/WS + 等待退出信号
+//   4. 初始化摄像头 (CameraManager)
+//   5. 初始化 MQTT 客户端, 订阅 report/ack/status topic
+//   6. 启动 Web 服务 (Mongoose REST API, :8080)
+//   7. 启动 WebSocket 推送 (:8082)
+//   8. 主循环: Poll Web/WS + 等待退出信号
 //
 // 数据处理:
 //   MQTT 收到消息 → OnMqttMessage → HandleSensorMessage
@@ -16,6 +17,7 @@
 //
 // 用法: ./edgegw config/development.yaml
 // ======================================================================
+#include "camera/camera_manager.hpp"
 #include "config/config_manager.hpp"
 #include "database/sqlite_store.hpp"
 #include "device/device_registry.hpp"
@@ -39,37 +41,46 @@ void OnSignal(int /*sig*/) { g_running = 0; }
 edgegw::device::DeviceRegistry g_registry;   // 设备状态表(内存)
 edgegw::database::SqliteStore g_db;          // 历史数据库(磁盘)
 edgegw::mqtt::MqttClient g_mqtt;             // MQTT 客户端(Web要发命令)
+edgegw::camera::CameraManager g_camera;      // 摄像头管理
 edgegw::web::WebContext g_web_ctx;           // Web 上下文(依赖注入)
 edgegw::web::WebServer g_web;                // Web 服务 (HTTP REST)
 edgegw::web::WebSocketServer g_ws;           // WebSocket 推送
 
+// 当前通讯方式: "mqtt" 或 "zigbee" (前端可切换)
+std::string g_transport = "mqtt";
+
 // ------------------------------------------------------------------
-// 处理一条解析成功的传感器数据
+// 处理一条解析成功的设备消息
 // 职责: 更新设备状态表 + 写入历史数据库 + WebSocket 推送
 // ------------------------------------------------------------------
 void HandleSensorMessage(const edgegw::device::SensorData& data) {
     // 1. 更新设备状态表 (最新值)
     g_registry.UpdateSensor(data);
 
-    // 2. 写入历史数据库 (每条记录)
-    g_db.InsertTelemetry(data);
+    // 2. 写入历史数据库 (仅传感器数据, ACK/状态不落库)
+    if (data.type == "sensor") {
+        g_db.InsertTelemetry(data);
+    }
 
     // 3. WebSocket 推送 (数据变化实时推给 Web/Qt 实现双端同步)
     g_ws.Broadcast(g_registry.ToJson());
 
-    // 4. 日志
+    // 4. 日志 (关键事件用 Info, 数据明细用 Debug)
     edgegw::logger::Logger::Info("[mqtt] dev=" + data.dev_id +
                                  " type=" + data.type +
                                  " msg=" + data.msg_id +
                                  " ts=" + std::to_string(data.ts));
-    if (data.has_temp)
-        edgegw::logger::Logger::Debug("    temp=" + std::to_string(data.temp));
-    if (data.has_humi)
-        edgegw::logger::Logger::Debug("    humi=" + std::to_string(data.humi));
-    if (data.has_light)
-        edgegw::logger::Logger::Debug("    light=" + std::to_string(data.light));
-    if (data.has_ir)
-        edgegw::logger::Logger::Debug("    ir=" + std::to_string(data.ir));
+    if (data.type == "ack") {
+        edgegw::logger::Logger::Info("    ack req=" + data.req_id +
+                                     " ok=" + std::to_string(data.ack_ok) +
+                                     " code=" + std::to_string(data.ack_code) +
+                                     " msg=" + data.ack_message);
+        return;
+    }
+    if (data.has_temp)  edgegw::logger::Logger::Debug("    temp=" + std::to_string(data.temp));
+    if (data.has_humi)  edgegw::logger::Logger::Debug("    humi=" + std::to_string(data.humi));
+    if (data.has_light) edgegw::logger::Logger::Debug("    light=" + std::to_string(data.light));
+    if (data.has_ir)    edgegw::logger::Logger::Debug("    ir=" + std::to_string(data.ir));
 }
 
 // ------------------------------------------------------------------
@@ -110,6 +121,8 @@ int main(int argc, char* argv[]) {
         cfg.GetString("logging.file", "data/logs/edgegw.log");
     const std::string log_level =
         cfg.GetString("logging.level", "info");
+    const std::string data_dir =
+        cfg.GetString("data.dir", "data");
     const std::string web_host = cfg.GetString("web.host", "0.0.0.0");
     const int web_port = cfg.GetInt("web.port", 8080);
     const int ws_port = cfg.GetInt("web.ws_port", 8082);
@@ -133,7 +146,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // ---------- 4. 初始化 MQTT ----------
+    // ---------- 4. 初始化摄像头 ----------
+    if (!g_camera.Init(data_dir)) {
+        edgegw::logger::Logger::Error("[main] 摄像头初始化失败");
+        return 1;
+    }
+
+    // ---------- 5. 初始化 MQTT ----------
     g_mqtt.SetMessageHandler(OnMqttMessage);
 
     edgegw::mqtt::MqttClient::Options mqtt_options;
@@ -145,25 +164,29 @@ int main(int argc, char* argv[]) {
         edgegw::logger::Logger::Error("[main] MQTT 启动失败");
         return 1;
     }
-    g_mqtt.Subscribe("iotgw/v1/dev/+/report", 0);
+    g_mqtt.Subscribe("iotgw/v1/dev/+/report", 0);   // 传感器上报
+    g_mqtt.Subscribe("iotgw/v1/dev/+/ack", 0);      // 命令回执
+    g_mqtt.Subscribe("iotgw/v1/dev/+/status", 0);   // 状态上报
 
-    // ---------- 5. 启动 Web 服务 ----------
+    // ---------- 6. 启动 Web 服务 ----------
     const std::string web_addr = web_host + ":" + std::to_string(web_port);
     g_web_ctx.registry = &g_registry;
     g_web_ctx.mqtt = &g_mqtt;
+    g_web_ctx.camera = &g_camera;
+    g_web_ctx.transport = &g_transport;
     if (!g_web.Start(web_addr, &g_web_ctx)) {
         edgegw::logger::Logger::Error("[main] Web 服务启动失败");
         return 1;
     }
 
-    // ---------- 6. 启动 WebSocket 推送 ----------
+    // ---------- 7. 启动 WebSocket 推送 ----------
     const std::string ws_addr = web_host + ":" + std::to_string(ws_port);
     if (!g_ws.Start(ws_addr)) {
         edgegw::logger::Logger::Error("[main] WebSocket 启动失败");
         return 1;
     }
 
-    // ---------- 7. 主循环 ----------
+    // ---------- 8. 主循环 ----------
     std::signal(SIGINT, OnSignal);
     std::signal(SIGTERM, OnSignal);
 
@@ -180,8 +203,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // ---------- 8. 退出清理 ----------
+    // ---------- 9. 退出清理 ----------
     edgegw::logger::Logger::Info("[main] 正在退出...");
+    g_camera.Shutdown();
     g_ws.Stop();
     g_web.Stop();
     g_mqtt.Stop();
