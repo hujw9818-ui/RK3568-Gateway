@@ -422,6 +422,14 @@
                     </div>
                 </div>
 
+                <div class="control-item">
+                    <div class="label-row"><span>舵机角度</span><span id="servo_ag_val"
+                                style="font-weight:800;color:var(--primary);">90°</span></div>
+                    <input type="range" id="servo_ag" value="90" min="0" max="180"
+                           oninput="document.getElementById('servo_ag_val').textContent = this.value + '°';"
+                           onchange="updateServo()">
+                </div>
+
                 <div class="control-item" style="border-left: 4px solid var(--warning); margin-bottom: 0;">
                     <div class="label-row"><span>紧急蜂鸣报警</span><label class="switch"><input type="checkbox"
                                 id="buzzer_sw" onchange="updateBuzzer()"><span class="slider"></span></label></div>
@@ -533,6 +541,10 @@ function renderStatus(data) {
     document.getElementById('motor_sw').checked = !!dev.fan_on;
     if (dev.fan_speed !== undefined) document.getElementById('motor_sp').value = dev.fan_speed;
     if (dev.fan_dir !== undefined) setMotorDirUI(dev.fan_dir);
+    if (dev.servo_angle !== undefined) {
+        document.getElementById('servo_ag').value = dev.servo_angle;
+        document.getElementById('servo_ag_val').textContent = dev.servo_angle + '°';
+    }
     document.getElementById('buzzer_sw').checked = !!dev.beep_on;
 }
 
@@ -606,6 +618,13 @@ function updateBuzzer() {
     const sw = document.getElementById('buzzer_sw').checked;
     addLog(`蜂鸣器: ${sw ? '响' : '停'}`);
     sendControl('beep', { on: sw ? 1 : 0 });
+}
+
+// ========== 舵机 ==========
+function updateServo() {
+    const angle = parseInt(document.getElementById('servo_ag').value);
+    addLog(`舵机: ${angle}°`);
+    sendControl('servo', { angle: angle });
 }
 
 // ========== 视频流 (轮询 last_photo 准实时) ==========
