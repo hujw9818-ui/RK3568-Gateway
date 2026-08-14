@@ -42,6 +42,23 @@ bool GetString(const rapidjson::Value& obj, const char* key, std::string& out) {
     return true;
 }
 
+// 从 rapidjson 节点取布尔值; 兼容 JSON 布尔 true/false 和数字 1/0
+// (协议和单片机发 "ok": true/false, 但旧代码可能发 1/0)
+bool GetBool(const rapidjson::Value& obj, const char* key, bool& out) {
+    if (!obj.IsObject()) return false;
+    auto it = obj.FindMember(key);
+    if (it == obj.MemberEnd()) return false;
+    if (it->value.IsBool()) {
+        out = it->value.GetBool();
+        return true;
+    }
+    if (it->value.IsInt()) {
+        out = (it->value.GetInt() != 0);
+        return true;
+    }
+    return false;
+}
+
 // 从 rapidjson 节点取 int64; 不存在返回 false
 bool GetInt64(const rapidjson::Value& obj, const char* key, int64_t& out) {
     if (!obj.IsObject()) return false;
@@ -74,8 +91,9 @@ void ParseActuatorFields(const rapidjson::Value& data, SensorData& out) {
 // 解析 body 中的 ACK 字段 (type=ack)
 void ParseAckFields(const rapidjson::Value& body, SensorData& out) {
     out.has_ack = true;
+    bool ok = false;
+    if (GetBool(body, "ok", ok)) out.ack_ok = ok;   // 布尔 true/false (兼容 1/0)
     int v = 0;
-    if (GetInt(body, "ok", v)) out.ack_ok = (v != 0);
     if (GetInt(body, "code", v)) out.ack_code = v;
     GetString(body, "message", out.ack_message);
 }
@@ -105,6 +123,13 @@ bool ParseSensorJson(const std::string& payload, SensorData& out) {
         return true;   // 有 type/dev 就算基本有效
     }
     const rapidjson::Value& body = body_it->value;
+
+    // 在线状态字段 (status 消息的 body.online; 遗嘱消息 online=false)
+    bool online = false;
+    if (GetBool(body, "online", online)) {
+        out.online = online;
+        out.has_online = true;
+    }
 
     // 4. 按消息类型解析
     if (out.type == "ack") {

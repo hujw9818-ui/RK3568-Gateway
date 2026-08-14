@@ -707,14 +707,15 @@ async function toggleRecord() {
     if (!recordStarted) {
         try {
             addLog('正在启动录像...');
-            const resp = await fetch('/api/camera/start_record', { method: 'POST' });
+            // 后端路由: POST /api/camera/record/start (返回 ok/path)
+            const resp = await fetch('/api/camera/record/start', { method: 'POST' });
             const result = await resp.json();
             if (result.ok) {
                 recordStarted = true;
                 recordBtn.innerHTML = '⏹ 停止录制';
                 addLog('✅ 录像已开始');
             } else {
-                addLog(`❌ 录像启动失败: ${result.error}`);
+                addLog(`❌ 录像启动失败: ${result.error || result.message || ''}`);
             }
         } catch (err) {
             addLog(`❌ 录像启动失败: ${err.message}`);
@@ -722,10 +723,16 @@ async function toggleRecord() {
     } else {
         try {
             addLog('正在停止录像...');
-            await fetch('/api/camera/stop_record', { method: 'POST' });
-            recordStarted = false;
-            recordBtn.innerHTML = '🔴 视频录制';
-            addLog('✅ 录像已保存');
+            // 后端路由: POST /api/camera/record/stop
+            const resp = await fetch('/api/camera/record/stop', { method: 'POST' });
+            const result = await resp.json();
+            if (result.ok) {
+                recordStarted = false;
+                recordBtn.innerHTML = '🔴 视频录制';
+                addLog('✅ 录像已保存');
+            } else {
+                addLog(`❌ 停止录像失败: ${result.error || ''}`);
+            }
         } catch (err) {
             addLog(`⚠️ 停止录像出错: ${err.message}`);
         }

@@ -3,11 +3,21 @@
 // ======================================================================
 #include "device/device_registry.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <sstream>
 
 namespace edgegw {
 namespace device {
+
+namespace {
+// 单调时钟毫秒 (在线超时判断用, 不受系统时间调整影响)
+int64_t NowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+}  // namespace
 
 // 用一条传感器数据更新设备状态
 void DeviceRegistry::UpdateSensor(const SensorData& data) {
@@ -16,8 +26,15 @@ void DeviceRegistry::UpdateSensor(const SensorData& data) {
     // ② 找到或创建该设备的条目 (operator[] 不存在会自动创建)
     DeviceState& state = devices_[data.dev_id];
     state.dev_id = data.dev_id;
-    state.last_seen_ms = /* TODO: 用真实时钟 */ 0;
-    state.online = true;
+    state.last_seen_ms = NowMs();   // 真实时钟
+
+    // 在线状态: 带 online 字段的消息按其值 (遗嘱 off → false);
+    // 其他消息收到即视为在线 (心跳语义)
+    if (data.has_online) {
+        state.online = data.online;
+    } else {
+        state.online = true;
+    }
 
     // ③ 只更新"这条消息里有的字段" (has_xxx 的用法!)
     //    传感器字段
@@ -54,8 +71,8 @@ bool DeviceRegistry::IsOnline(const std::string& dev_id,
     if (!Get(dev_id, state)) {
         return false;   // 设备不存在 = 离线
     }
-    // TODO: 需要真实时钟, 暂时用 last_seen 非 0 表示在线
-    return state.last_seen_ms != 0;
+    // 在线标志 + 最近消息时间在超时窗口内
+    return state.online && (NowMs() - state.last_seen_ms) < timeout_ms;
 }
 
 // 生成全部设备的最新状态 JSON

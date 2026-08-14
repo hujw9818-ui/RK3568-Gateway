@@ -55,6 +55,10 @@ struct SensorData {
     bool has_ack = false;       // 是否 ACK 消息
     int  ack_code = 0;          // 错误码
     std::string ack_message;    // 回执消息
+
+    // ---- 在线状态 (type=status 的 body.online) ----
+    bool online = false;        // 在线/离线 (遗嘱消息 online=false)
+    bool has_online = false;    // 消息是否带 online 字段
 };
 
 }  // namespace device
