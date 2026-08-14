@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QMainWindow>
 #include <QNetworkAccessManager>
+#include <QHash>
 
 class QCheckBox;
 class QLabel;
@@ -44,6 +45,7 @@ private:
     QString server_;
     QString apiBase_;          // http://host:8080
     QNetworkAccessManager* mgr_;
+    QHash<QString, qint64> lastCmdTime_;   // 各目标最近命令时间 (回显防抖)
 
     // 定时器
     QTimer* snapshotTimer_;     // 视频轮询 (last_photo)

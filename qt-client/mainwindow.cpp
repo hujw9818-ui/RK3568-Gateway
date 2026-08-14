@@ -162,7 +162,8 @@ void MainWindow::buildUi() {
     ledBr_->setRange(0, 100);
     ledBr_->setValue(50);
     connect(ledSw_, &QCheckBox::toggled, this, &MainWindow::sendLed);
-    connect(ledBr_, &QSlider::valueChanged, this, &MainWindow::sendLed);
+    // 松手才发 (拖动过程不发, 避免命令风暴导致单片机缓冲溢出丢命令)
+    connect(ledBr_, &QSlider::sliderReleased, this, &MainWindow::sendLed);
     clay->addWidget(ledSw_);
     clay->addWidget(ledBr_);
 
@@ -178,7 +179,8 @@ void MainWindow::buildUi() {
     dirRow->addWidget(dirF_);
     dirRow->addWidget(dirR_);
     connect(motorSw_, &QCheckBox::toggled, this, &MainWindow::sendMotor);
-    connect(motorSp_, &QSlider::valueChanged, this, &MainWindow::sendMotor);
+    // 松手才发 (避免命令风暴)
+    connect(motorSp_, &QSlider::sliderReleased, this, &MainWindow::sendMotor);
     connect(dirF_, &QPushButton::clicked, [this]() { sendMotorDir(false); });
     connect(dirR_, &QPushButton::clicked, [this]() { sendMotorDir(true); });
     clay->addWidget(motorSw_);
@@ -291,9 +293,12 @@ void MainWindow::updateSensor(const QJsonObject& dev) {
         valIr_->setText(has ? "有人" : "安全");
     }
     // 执行器状态回显 (不打断用户操作: 仅在值不同时更新)
+    // 命令发出后 2 秒内跳过回显: 避免在途的旧状态响应把用户操作弹回
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (dev.contains("led_on")) {
         const bool on = dev.value("led_on").toBool();
-        if (ledSw_->isChecked() != on) {
+        const bool recent = (now - lastCmdTime_.value("led", 0)) < 2000;
+        if (!recent && ledSw_->isChecked() != on) {
             ledSw_->blockSignals(true);
             ledSw_->setChecked(on);
             ledSw_->blockSignals(false);
@@ -301,7 +306,8 @@ void MainWindow::updateSensor(const QJsonObject& dev) {
     }
     if (dev.contains("servo_angle")) {
         const int a = dev.value("servo_angle").toInt();
-        if (servoAg_->value() != a) {
+        const bool recent = (now - lastCmdTime_.value("servo", 0)) < 2000;
+        if (!recent && servoAg_->value() != a) {
             servoAg_->blockSignals(true);
             servoAg_->setValue(a);
             servoAg_->blockSignals(false);
@@ -345,6 +351,7 @@ void MainWindow::sendLed() {
     p["on"] = ledSw_->isChecked() ? 1 : 0;
     p["brightness"] = ledBr_->value();
     postJson("/api/control", buildCmd("led", p));
+    lastCmdTime_["led"] = QDateTime::currentMSecsSinceEpoch();
     addLog(QString("LED: %1, 亮度 %2%")
         .arg(ledSw_->isChecked() ? "开" : "关").arg(ledBr_->value()));
 }
@@ -355,6 +362,7 @@ void MainWindow::sendMotor() {
     p["speed"] = motorSp_->value();
     p["dir"] = motorDir_;
     postJson("/api/control", buildCmd("fan", p));
+    lastCmdTime_["fan"] = QDateTime::currentMSecsSinceEpoch();
 }
 
 void MainWindow::sendMotorDir(bool reverse) {
@@ -372,6 +380,7 @@ void MainWindow::sendServo() {
     QJsonObject p;
     p["angle"] = servoAg_->value();
     postJson("/api/control", buildCmd("servo", p));
+    lastCmdTime_["servo"] = QDateTime::currentMSecsSinceEpoch();
     addLog(QString("舵机: %1°").arg(servoAg_->value()));
 }
 
@@ -379,6 +388,7 @@ void MainWindow::sendBuzzer() {
     QJsonObject p;
     p["on"] = buzzerSw_->isChecked() ? 1 : 0;
     postJson("/api/control", buildCmd("beep", p));
+    lastCmdTime_["beep"] = QDateTime::currentMSecsSinceEpoch();
     addLog(QString("蜂鸣器: %1").arg(buzzerSw_->isChecked() ? "响" : "停"));
 }
 
