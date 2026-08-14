@@ -29,7 +29,7 @@ public:
     // 初始化: 设置保存目录和设备参数
     bool Init(const std::string& data_dir,
               const std::string& device = "/dev/video0",
-              int width = 640, int height = 480, int framerate = 15);
+              int width = 640, int height = 480, int framerate = 10);
 
     // 启动推流 (常驻 gst 进程写 latest.jpg)
     bool Start();
@@ -72,7 +72,7 @@ private:
     std::string device_ = "/dev/video0";
     int width_ = 640;
     int height_ = 480;
-    int framerate_ = 15;
+    int framerate_ = 10;
     std::string runtime_dir_;     // latest.jpg 所在目录
     std::string media_dir_;       // 照片/录像保存目录
     pid_t stream_pid_ = -1;

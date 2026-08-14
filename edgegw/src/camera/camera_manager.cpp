@@ -91,7 +91,7 @@ bool CameraManager::Init(const std::string& data_dir, const std::string& device,
     width_ = width;
     height_ = height;
     framerate_ = framerate;
-    runtime_dir_ = data_dir + "/runtime";
+    runtime_dir_ = "/tmp/iotgw-camera";   // tmpfs 内存盘, 帧写入快 (同学方案)
     media_dir_ = data_dir;
 
     // 清理可能残留的孤儿 gst 进程 (上次网关异常退出留下的推流进程)
@@ -184,7 +184,7 @@ bool CameraManager::Start() {
         " ! video/x-raw,format=NV12,width=" + std::to_string(width_) +
         ",height=" + std::to_string(height_) +
         ",framerate=" + std::to_string(framerate_) + "/1" +
-        " ! mppjpegenc ! multifilesink location=" + FramePath() +
+        " ! mppjpegenc quant=5 ! multifilesink location=" + FramePath() +
         " max-files=1 post-messages=false";
 
     if (!Spawn(pipeline, &stream_pid_)) return false;
@@ -204,7 +204,7 @@ bool CameraManager::Start() {
             " ! video/x-raw,format=NV12,width=" + std::to_string(width_) +
             ",height=" + std::to_string(height_) +
             ",framerate=" + std::to_string(framerate_) + "/1" +
-            " ! mppjpegenc ! multifilesink location=" + FramePath() +
+            " ! mppjpegenc quant=5 ! multifilesink location=" + FramePath() +
             " max-files=1 post-messages=false";
         if (!Spawn(pipeline_retry, &stream_pid_)) return false;
         for (int i = 0; i < 30 && IsAlive(stream_pid_) && !HasFrame(); ++i)
@@ -248,7 +248,7 @@ std::string CameraManager::TakeSnapshot() {
             " num-buffers=1 ! video/x-raw,format=NV12,width=" +
             std::to_string(width_) + ",height=" + std::to_string(height_) +
             ",framerate=" + std::to_string(framerate_) + "/1" +
-            " ! mppjpegenc ! filesink location=" + path;
+            " ! mppjpegenc quant=5 ! filesink location=" + path;
 
         std::string cmd = std::string("/bin/sh -c \"") + pipeline + "\"";
         if (std::system(cmd.c_str()) != 0) {
@@ -304,7 +304,7 @@ std::string CameraManager::TakeSnapshotBase64() {
             " num-buffers=1 ! video/x-raw,format=NV12,width=" +
             std::to_string(width_) + ",height=" + std::to_string(height_) +
             ",framerate=" + std::to_string(framerate_) + "/1" +
-            " ! mppjpegenc ! filesink location=" + tmp;
+            " ! mppjpegenc quant=5 ! filesink location=" + tmp;
         std::string cmd = std::string("/bin/sh -c \"") + pipeline + "\"";
         bool snap_ok = (std::system(cmd.c_str()) == 0);
         if (snap_ok) {
@@ -350,17 +350,18 @@ std::string CameraManager::StartRecord() {
         usleep(500000);   // 等 sensor/V4L2 完全释放
     }
 
-    std::string name = TimestampedName("record", "mp4");
+    std::string name = TimestampedName("record", "mkv");
     std::string path = media_dir_ + "/" + name;
 
-    // 独立录像进程: 硬件 H.264 编码 → mp4
-    // -e (eos-on-shutdown): SIGINT 停止时强制发 EOS, mp4mux 才能写 moov header
+    // 独立录像进程: 硬件 H.264 编码 → mkv (matroskamux 流式落盘)
+    // matroskamux: EBML 边写边落盘, SIGTERM 中途停止不丢数据 (同学验证)
+    // mp4mux faststart 要等 EOS 才写盘, 中途停止会 0 字节, 故弃用
     std::string pipeline =
         "exec gst-launch-1.0 -e -q v4l2src device=" + device_ +
         " ! video/x-raw,format=NV12,width=" + std::to_string(width_) +
         ",height=" + std::to_string(height_) +
         ",framerate=" + std::to_string(framerate_) + "/1" +
-        " ! mpph264enc ! h264parse ! mp4mux faststart=true" +
+        " ! mpph264enc ! h264parse ! matroskamux" +
         " ! filesink location=" + path;
 
     if (!Spawn(pipeline, &record_pid_)) return "";

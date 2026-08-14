@@ -325,7 +325,7 @@ void WebServer::PushStreamFrame() {
 
     const auto now = std::chrono::steady_clock::now();
     if (last_frame_at_ != std::chrono::steady_clock::time_point{} &&
-        now - last_frame_at_ < std::chrono::milliseconds(66))
+        now - last_frame_at_ < std::chrono::milliseconds(100))
         return;
 
     // 读最新帧; 文件消失窗口 (multifilesink unlink 间隙) 时用缓存帧兜底
