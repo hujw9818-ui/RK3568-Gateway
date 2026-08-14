@@ -56,6 +56,9 @@ public:
     // 注册 MJPEG 流客户端 (HttpHandler 回调内部使用)
     void AddStreamClient(void* conn);
 
+    // MJPEG 流客户端断开回调 (HttpHandler 的 MG_EV_CLOSE 时调用, 指针仍有效)
+    void OnStreamClientClose(void* conn);
+
     // 断开所有 MJPEG 流客户端 (停止推流时调用, 清理死连接)
     void ClearStreamClients();
 
@@ -66,10 +69,14 @@ private:
     // MJPEG 流客户端列表 + 帧率控制
     std::vector<void*> stream_clients_;
     std::chrono::steady_clock::time_point last_frame_at_{};
-    std::string last_frame_data_;   // 最后一帧缓存 (文件消失窗口时兜底)
+    std::string last_frame_data_;       // 最后一帧缓存 (文件消失窗口时兜底)
+    bool had_stream_clients_ = false;   // 曾有过 MJPEG 客户端 (自动停推流用)
 
     // 向 MJPEG 客户端推一帧 (内部)
     void PushStreamFrame();
+
+    // 清理死连接; 全部断开后自动停推流 (推流生命周期由网关管理)
+    void CleanupStreamClients();
 };
 
 }  // namespace web

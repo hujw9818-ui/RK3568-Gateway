@@ -645,41 +645,28 @@ function updateServo() {
     sendControl('servo', { angle: angle });
 }
 
-// ========== 视频流 (轮询 last_photo 准实时) ==========
-async function startStream() {
+// ========== 视频流 ==========
+// 推流生命周期由网关管理: 连接流时自动推流, 所有客户端断开后自动停推流
+// 前端只负责连接/断开自己的流, 不直接控制网关推流进程
+function startStream() {
     if (streamStarted) return;
-    addLog('正在启动视频流...');
-    try {
-        // 启动网关推流 (常驻 gst 进程)
-        const resp = await fetch('/api/camera/start', { method: 'POST' });
-        const result = await resp.json();
-        if (!result.ok) {
-            addLog('❌ 视频流启动失败: ' + (result.message || ''));
-            return;
-        }
-        streamStarted = true;
-        streamStartBtn.disabled = true;
-        streamStopBtn.disabled = false;
-        // img 指向 MJPEG 流, URL 加时间戳强制浏览器新建连接
-        video.src = '/api/camera/stream?t=' + Date.now();
-        addLog('✅ 视频流已连接 (MJPEG 15fps)');
-    } catch (err) {
-        addLog(`❌ 视频流启动失败: ${err.message}`);
-    }
+    addLog('正在连接视频流...');
+    streamStarted = true;
+    streamStartBtn.disabled = true;
+    streamStopBtn.disabled = false;
+    // 连接 MJPEG 流, 网关自动启动推流; URL 加时间戳强制浏览器新建连接
+    video.src = '/api/camera/stream?t=' + Date.now();
+    addLog('✅ 视频流已连接');
 }
 
-async function stopStream() {
+function stopStream() {
     if (!streamStarted) return;
-    try {
-        await fetch('/api/camera/stop', { method: 'POST' });
-    } catch (err) {
-        // 忽略停止错误
-    }
+    // 只断开自己的流连接, 网关检测到无客户端后自动停推流 (不影响其他客户端)
     video.src = '';
     streamStarted = false;
     streamStartBtn.disabled = false;
     streamStopBtn.disabled = true;
-    addLog('⏹ 视频流已停止');
+    addLog('⏹ 已断开视频流');
 }
 
 // ========== 抓拍 (拍照后显示照片) ==========

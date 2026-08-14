@@ -451,21 +451,17 @@ void MainWindow::refreshStatus() {
 // 视频控制
 // ------------------------------------------------------------------
 void MainWindow::onStreamStart() {
-    // 启动网关推流
-    QJsonObject body;
-    postJson("/api/camera/start", body);
-    // 拉 MJPEG multipart 流 (wayland/GPU 渲染, 无性能问题)
+    // 连接 MJPEG multipart 流, 网关自动启动推流 (无客户端时自动停止)
     QNetworkRequest req(QUrl(apiBase_ + "/api/camera/stream"));
     streamReply_ = mgr_->get(req);
     connect(streamReply_, &QNetworkReply::readyRead,
             this, &MainWindow::onStreamData);
     snapshotTimer_->stop();   // 停轮询, 流接管
-    addLog("开始推流 (MJPEG)");
+    addLog("已连接视频流 (MJPEG)");
 }
 
 void MainWindow::onStreamStop() {
-    QJsonObject body;
-    postJson("/api/camera/stop", body);
+    // 只断开自己的流连接, 网关检测到无客户端后自动停推流
     if (streamReply_) {
         streamReply_->disconnect();
         streamReply_->abort();
@@ -474,7 +470,7 @@ void MainWindow::onStreamStop() {
     }
     streamBuffer_.clear();
     snapshotTimer_->start();
-    addLog("停止推流");
+    addLog("已断开视频流");
 }
 
 // MJPEG 流帧解析: SOI(FF D8) 帧开始, EOI(FF D9) 帧结束

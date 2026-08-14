@@ -38,6 +38,11 @@ bool IsGet(const struct mg_http_message* hm) {
 
 // HTTP 请求回调 (Mongoose 调用)
 void HttpHandler(struct mg_connection* c, int ev, void* ev_data) {
+    // MG_EV_CLOSE: 连接即将释放 (此时指针仍有效), 从 MJPEG 客户端列表移除
+    if (ev == MG_EV_CLOSE) {
+        if (g_web_server != nullptr) g_web_server->OnStreamClientClose(c);
+        return;
+    }
     if (ev != MG_EV_HTTP_MSG) return;
     auto* hm = static_cast<struct mg_http_message*>(ev_data);
     WebContext* ctx = GetContext(c);
@@ -294,13 +299,50 @@ void WebServer::Poll(int timeout_ms) {
     if (mgr_ == nullptr) return;
     mg_mgr_poll(static_cast<struct mg_mgr*>(mgr_), timeout_ms);
     PushStreamFrame();
+    CleanupStreamClients();
+}
+
+// ------------------------------------------------------------
+// 清理死连接; 客户端全部断开后自动停推流
+// (推流生命周期由网关管理, 前端断开自己的连接即可, 不影响其他客户端)
+// ------------------------------------------------------------
+void WebServer::CleanupStreamClients() {
+    // 清理死连接 (is_closing 的移除)
+    for (auto it = stream_clients_.begin(); it != stream_clients_.end();) {
+        auto* c = static_cast<struct mg_connection*>(*it);
+        if (c->is_closing) {
+            it = stream_clients_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    // 曾经有客户端, 现在全部断开 → 自动停推流 (推流生命周期由网关管理)
+    if (had_stream_clients_ && stream_clients_.empty() && ctx_ != nullptr &&
+        ctx_->camera != nullptr) {
+        had_stream_clients_ = false;
+        std::printf("[web] 所有 MJPEG 客户端已断开, 自动停止推流\n");
+        ctx_->camera->Stop();
+    }
 }
 
 // 注册 MJPEG 流客户端 (HttpHandler 回调)
 void WebServer::AddStreamClient(void* conn) {
     stream_clients_.push_back(conn);
+    had_stream_clients_ = true;
     std::printf("[web] MJPEG 客户端已连接, 当前 %zu 个\n",
                 stream_clients_.size());
+}
+
+// MJPEG 客户端断开 (MG_EV_CLOSE 时调用, 连接尚未释放, 指针安全)
+void WebServer::OnStreamClientClose(void* conn) {
+    for (auto it = stream_clients_.begin(); it != stream_clients_.end(); ++it) {
+        if (*it == conn) {
+            stream_clients_.erase(it);
+            std::printf("[web] MJPEG 客户端断开, 剩余 %zu 个\n",
+                        stream_clients_.size());
+            return;
+        }
+    }
 }
 
 // 断开所有 MJPEG 流客户端 (停止推流时调用)
@@ -311,6 +353,7 @@ void WebServer::ClearStreamClients() {
         conn->is_closing = 1;
     }
     stream_clients_.clear();
+    had_stream_clients_ = false;   // 显式停推流, 不触发自动停流
     last_frame_at_ = std::chrono::steady_clock::time_point{};
     std::printf("[web] 已断开 %zu 个 MJPEG 客户端\n",
                 static_cast<size_t>(stream_clients_.size()));
