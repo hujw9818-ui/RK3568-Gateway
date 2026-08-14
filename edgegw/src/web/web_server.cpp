@@ -74,8 +74,16 @@ void HttpHandler(struct mg_connection* c, int ev, void* ev_data) {
         const std::string topic = "iotgw/v1/dev/mcu01/cmd";
         std::string payload(hm->body.buf, hm->body.len);
 
-        // ① 下发命令到 MQTT
-        bool ok = ctx->mqtt->Publish(topic, payload, 1);
+        // ① 按当前通讯方式下发命令
+        bool ok = true;
+        if (ctx->transport != nullptr && *ctx->transport == "zigbee" &&
+            ctx->zigbee != nullptr) {
+            // Zigbee 通道: DL-30 透传串口 (同 JSON 格式 + \r\n)
+            ok = ctx->zigbee->Send(payload);
+        } else {
+            // MQTT 通道 (默认)
+            ok = ctx->mqtt->Publish(topic, payload, 1);
+        }
 
         // ② 乐观更新: 解析命令 → 更新状态表 (前端立即同步)
         if (ok && ctx->registry != nullptr) {

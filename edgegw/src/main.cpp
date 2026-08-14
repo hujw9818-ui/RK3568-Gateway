@@ -25,6 +25,7 @@
 #include "device/sensor_data.hpp"
 #include "logger/logger.hpp"
 #include "mqtt/mqtt_client.hpp"
+#include "serial/zigbee_serial.hpp"
 #include "web/web_server.hpp"
 #include "web/websocket_server.hpp"
 
@@ -46,6 +47,7 @@ edgegw::camera::CameraManager g_camera;      // 摄像头管理
 edgegw::web::WebContext g_web_ctx;           // Web 上下文(依赖注入)
 edgegw::web::WebServer g_web;                // Web 服务 (HTTP REST)
 edgegw::web::WebSocketServer g_ws;           // WebSocket 推送
+edgegw::serial::ZigbeeSerial g_zigbee;       // Zigbee 串口 (DL-30 透传)
 
 // 当前通讯方式: "mqtt" 或 "zigbee" (前端可切换)
 std::string g_transport = "mqtt";
@@ -94,6 +96,18 @@ void OnMqttMessage(const edgegw::mqtt::Message& message) {
         edgegw::logger::Logger::Warn("[mqtt] 解析失败, topic=" +
                                      message.topic +
                                      " payload=" + message.payload);
+        return;
+    }
+    HandleSensorMessage(data);
+}
+
+// ------------------------------------------------------------------
+// Zigbee 串口行回调 (DL-30 透传, 与 MQTT 同 JSON 格式)
+// ------------------------------------------------------------------
+void OnZigbeeLine(const std::string& line) {
+    edgegw::device::SensorData data;
+    if (!edgegw::device::ParseSensorJson(line, data)) {
+        edgegw::logger::Logger::Warn("[zigbee] 解析失败: " + line);
         return;
     }
     HandleSensorMessage(data);
@@ -169,6 +183,17 @@ int main(int argc, char* argv[]) {
     g_mqtt.Subscribe("iotgw/v1/dev/+/ack", 0);      // 命令回执
     g_mqtt.Subscribe("iotgw/v1/dev/+/status", 0);   // 状态上报
 
+    // ---------- 5.5 初始化 Zigbee 串口 (DL-30 透传) ----------
+    const std::string zigbee_device =
+        cfg.GetString("serial.device", "/dev/ttyS3");
+    const int zigbee_baudrate = cfg.GetInt("serial.baudrate", 115200);
+    if (g_zigbee.Open(zigbee_device, zigbee_baudrate)) {
+        g_zigbee.StartReadLoop(OnZigbeeLine);
+    } else {
+        edgegw::logger::Logger::Warn(
+            "[main] Zigbee 串口打开失败 (DL-30 未接?), 仅 MQTT 通道可用");
+    }
+
     // ---------- 6. 启动 Web 服务 ----------
     const std::string web_addr = web_host + ":" + std::to_string(web_port);
     g_web_ctx.registry = &g_registry;
@@ -176,6 +201,7 @@ int main(int argc, char* argv[]) {
     g_web_ctx.camera = &g_camera;
     g_web_ctx.transport = &g_transport;
     g_web_ctx.ws = &g_ws;
+    g_web_ctx.zigbee = &g_zigbee;
     if (!g_web.Start(web_addr, &g_web_ctx)) {
         edgegw::logger::Logger::Error("[main] Web 服务启动失败");
         return 1;
@@ -207,6 +233,7 @@ int main(int argc, char* argv[]) {
     // ---------- 9. 退出清理 ----------
     edgegw::logger::Logger::Info("[main] 正在退出...");
     g_camera.Shutdown();
+    g_zigbee.Close();
     g_ws.Stop();
     g_web.Stop();
     g_mqtt.Stop();

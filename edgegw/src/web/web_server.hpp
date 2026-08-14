@@ -24,6 +24,7 @@
 #include "camera/camera_manager.hpp"
 #include "device/device_registry.hpp"
 #include "mqtt/mqtt_client.hpp"
+#include "serial/zigbee_serial.hpp"
 
 namespace edgegw {
 namespace web {
@@ -38,6 +39,7 @@ struct WebContext {
     camera::CameraManager* camera = nullptr;
     std::string* transport = nullptr;   // 当前通讯方式
     class WebSocketServer* ws = nullptr;   // 状态更新后推送
+    serial::ZigbeeSerial* zigbee = nullptr;   // Zigbee 串口 (DL-30)
 };
 
 // Web 服务类: 封装 Mongoose 生命周期
