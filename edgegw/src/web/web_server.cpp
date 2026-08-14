@@ -328,13 +328,18 @@ void WebServer::PushStreamFrame() {
         now - last_frame_at_ < std::chrono::milliseconds(66))
         return;
 
-    if (!ctx_->camera->HasFrame()) return;
-
-    std::ifstream file(ctx_->camera->FramePath(), std::ios::binary);
-    if (!file.is_open()) return;
-    const std::string data((std::istreambuf_iterator<char>(file)),
-                           std::istreambuf_iterator<char>());
+    // 读最新帧; 文件消失窗口 (multifilesink unlink 间隙) 时用缓存帧兜底
+    std::string data;
+    if (ctx_->camera->HasFrame()) {
+        std::ifstream file(ctx_->camera->FramePath(), std::ios::binary);
+        if (file.is_open()) {
+            data.assign((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+        }
+    }
+    if (data.empty()) data = last_frame_data_;
     if (data.empty()) return;
+    last_frame_data_ = data;
 
     last_frame_at_ = now;
 

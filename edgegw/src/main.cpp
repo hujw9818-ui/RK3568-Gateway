@@ -195,12 +195,13 @@ int main(int argc, char* argv[]) {
     edgegw::logger::Logger::Info("[main] 网关运行中, Ctrl+C 退出");
     while (g_running) {
         // Web 服务事件轮询 (处理 HTTP 请求)
-        g_web.Poll(50);
-        g_ws.Poll(50);
+        // timeout 10ms: 保证 MJPEG 推帧周期 ~30ms (15fps 需要 <66ms)
+        g_web.Poll(10);
+        g_ws.Poll(10);
 
-        // 休眠 50ms, 让出 CPU (忙等会占满一个核)
+        // 休眠 10ms, 让出 CPU (忙等会占满一个核)
         // 信号会打断休眠, 退出响应仍然及时
-        usleep(50000);
+        usleep(10000);
     }
 
     // ---------- 9. 退出清理 ----------

@@ -66,6 +66,7 @@ private:
     // MJPEG 流客户端列表 + 帧率控制
     std::vector<void*> stream_clients_;
     std::chrono::steady_clock::time_point last_frame_at_{};
+    std::string last_frame_data_;   // 最后一帧缓存 (文件消失窗口时兜底)
 
     // 向 MJPEG 客户端推一帧 (内部)
     void PushStreamFrame();
