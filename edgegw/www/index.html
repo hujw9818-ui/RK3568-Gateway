@@ -132,20 +132,36 @@
         }
 
         .video-box video {
+            position: absolute;
+            inset: 0;
             width: 100%;
             height: 100%;
             object-fit: contain;
         }
 
-        .video-box img {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
+        /* 视频全屏模式 */
+        .video-box:fullscreen {
+            width: 100vw;
+            height: 100vh;
+            border-radius: 0;
+            border: none;
+        }
+
+        /* 主视频流: 服务端无旋转(640x480), 客户端旋转 -90° 显示正立 */
+        #videoPlayer {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%) rotate(-90deg);
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
         }
 
         .video-bar {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(5, 1fr);
             gap: 10px;
             margin-top: 15px;
         }
@@ -364,15 +380,17 @@
                     <!-- 抓拍缩略图: 显示在视频右下角, 不影响视频流 -->
                     <img id="snapshotThumb" src="" alt=""
                          style="position:absolute; right:10px; bottom:10px;
-                                width:120px; height:90px; object-fit:cover;
+                                width:90px; height:120px; object-fit:cover;
                                 border:2px solid #fff; border-radius:8px;
-                                display:none; box-shadow:0 4px 12px rgba(0,0,0,.5);">
+                                display:none; box-shadow:0 4px 12px rgba(0,0,0,.5);
+                                transform: rotate(-90deg);">
                 </div>
                 <div class="video-bar">
                     <button id="streamStartBtn" class="btn btn-stream-start">▶ 开始推流</button>
                     <button id="streamStopBtn" class="btn btn-stream-stop" disabled>⏹ 停止推流</button>
                     <button id="snapshotBtn" class="btn btn-cap">📸 抓拍照片</button>
                     <button id="recordBtn" class="btn btn-rec">🔴 视频录制</button>
+                    <button id="fullscreenBtn" class="btn btn-fs">⛶ 全屏</button>
                 </div>
             </div>
 
@@ -753,11 +771,22 @@ async function switchLink(link) {
     }
 }
 
+// ========== 全屏 ==========
+function toggleFullscreen() {
+    const box = document.querySelector('.video-box');
+    if (!document.fullscreenElement) {
+        box.requestFullscreen().catch(() => addLog('全屏失败'));
+    } else {
+        document.exitFullscreen();
+    }
+}
+
 // ========== 事件绑定 ==========
 streamStartBtn.onclick = startStream;
 streamStopBtn.onclick = stopStream;
 snapshotBtn.onclick = takeSnapshot;
 recordBtn.onclick = toggleRecord;
+fullscreenBtn.onclick = toggleFullscreen;
 
 // ========== 初始化 ==========
 connectWS();

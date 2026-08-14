@@ -12,6 +12,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPixmap>
+#include <QTransform>
 #include <QLabel>
 #include <QListWidget>
 #include <QNetworkReply>
@@ -407,6 +408,8 @@ void MainWindow::refreshSnapshot() {
         if (data.size() < 100) return;
         QPixmap pm;
         if (pm.loadFromData(data)) {
+            // 客户端旋转 -90° (服务端无旋转, 15fps 满帧)
+            pm = pm.transformed(QTransform().rotate(-90));
             videoLabel_->setPixmap(pm.scaled(
                 videoLabel_->size(), Qt::KeepAspectRatio,
                 Qt::SmoothTransformation));
@@ -475,26 +478,37 @@ void MainWindow::onStreamStop() {
 }
 
 // MJPEG 流帧解析: SOI(FF D8) 帧开始, EOI(FF D9) 帧结束
+// 只解析最新一帧 (丢弃中间帧, 避免事件堆积导致画面延迟)
 void MainWindow::onStreamData() {
     streamBuffer_.append(streamReply_->readAll());
 
-    int start = streamBuffer_.indexOf("\xff\xd8");
-    int end = (start >= 0) ? streamBuffer_.indexOf("\xff\xd9", start) : -1;
-    while (start >= 0 && end > start) {
-        const QByteArray jpeg = streamBuffer_.mid(start, end - start + 2);
+    int lastStart = -1, lastEnd = -1;
+    int s = streamBuffer_.indexOf("\xff\xd8");
+    while (s >= 0) {
+        const int e = streamBuffer_.indexOf("\xff\xd9", s);
+        if (e > s) {
+            lastStart = s;
+            lastEnd = e;
+            s = e + 2;
+        } else {
+            break;
+        }
+    }
+    if (lastStart >= 0 && lastEnd > lastStart) {
+        const QByteArray jpeg =
+            streamBuffer_.mid(lastStart, lastEnd - lastStart + 2);
+        streamBuffer_.remove(0, lastEnd + 2);
         QImage img;
         if (img.loadFromData(jpeg)) {
-            // 画面方向已在网关侧修正 (videoflip), 这里直接显示
-            QPixmap pix = QPixmap::fromImage(img).scaled(
+            // 客户端旋转 -90° (服务端无旋转, 15fps 满帧)
+            img = img.transformed(QTransform().rotate(-90));
+            videoLabel_->setPixmap(QPixmap::fromImage(img).scaled(
                 videoLabel_->size(), Qt::KeepAspectRatio,
-                Qt::SmoothTransformation);
-            videoLabel_->setPixmap(pix);
+                Qt::FastTransformation));
         }
-        streamBuffer_.remove(0, end + 2);
-        start = streamBuffer_.indexOf("\xff\xd8");
-        end = (start >= 0) ? streamBuffer_.indexOf("\xff\xd9", start) : -1;
+    } else if (streamBuffer_.size() > 600000) {
+        streamBuffer_.clear();
     }
-    if (streamBuffer_.size() > 600000) streamBuffer_.clear();
 }
 
 void MainWindow::onSnapshot() {
@@ -520,6 +534,8 @@ void MainWindow::onSnapshot() {
             addLog("抓拍照片解析失败");
             return;
         }
+        // 客户端旋转 -90° (与服务端无旋转推流一致)
+        img = img.transformed(QTransform().rotate(-90));
         videoLabel_->setPixmap(QPixmap::fromImage(img).scaled(
             videoLabel_->size(), Qt::KeepAspectRatio,
             Qt::SmoothTransformation));
