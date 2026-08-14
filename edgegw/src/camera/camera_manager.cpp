@@ -184,6 +184,7 @@ bool CameraManager::Start() {
         " ! video/x-raw,format=NV12,width=" + std::to_string(width_) +
         ",height=" + std::to_string(height_) +
         ",framerate=" + std::to_string(framerate_) + "/1" +
+        " ! videoflip method=counterclockwise" +
         " ! mppjpegenc ! multifilesink location=" + FramePath() +
         " max-files=1 post-messages=false";
 
@@ -222,7 +223,11 @@ bool CameraManager::Start() {
 }
 
 bool CameraManager::Stop() {
-    StopRecord();
+    // 录像中: 先停录像 (不自动恢复推流, 因为本函数就是要停推流)
+    if (IsAlive(record_pid_)) {
+        StopProcess(&record_pid_, "录像");
+        record_file_.clear();
+    }
     return StopProcess(&stream_pid_, "推流");
 }
 
@@ -341,12 +346,20 @@ std::string CameraManager::TakeSnapshotBase64() {
 std::string CameraManager::StartRecord() {
     if (IsAlive(record_pid_)) return record_file_;   // 已在录像
 
+    // 录像需要独占 /dev/video0, 先停推流 (rkisp 主通道只能开一个)
+    if (IsAlive(stream_pid_)) {
+        logger::Logger::Info("[camera] 录像前暂停推流");
+        StopProcess(&stream_pid_, "推流");
+        usleep(500000);   // 等 sensor/V4L2 完全释放
+    }
+
     std::string name = TimestampedName("record", "mp4");
     std::string path = media_dir_ + "/" + name;
 
     // 独立录像进程: 硬件 H.264 编码 → mp4
+    // -e (eos-on-shutdown): SIGINT 停止时强制发 EOS, mp4mux 才能写 moov header
     std::string pipeline =
-        "exec gst-launch-1.0 -q v4l2src device=" + device_ +
+        "exec gst-launch-1.0 -e -q v4l2src device=" + device_ +
         " ! video/x-raw,format=NV12,width=" + std::to_string(width_) +
         ",height=" + std::to_string(height_) +
         ",framerate=" + std::to_string(framerate_) + "/1" +
@@ -372,6 +385,9 @@ std::string CameraManager::StartRecord() {
 bool CameraManager::StopRecord() {
     const bool ok = StopProcess(&record_pid_, "录像");
     record_file_.clear();
+    // 录完自动恢复推流
+    usleep(500000);
+    Start();
     return ok;
 }
 
