@@ -184,8 +184,7 @@ bool CameraManager::Start() {
         " ! video/x-raw,format=NV12,width=" + std::to_string(width_) +
         ",height=" + std::to_string(height_) +
         ",framerate=" + std::to_string(framerate_) + "/1" +
-        " ! videoflip method=counterclockwise" +
-        " ! mppjpegenc ! multifilesink location=" + FramePath() +
+        " ! mppjpegenc rotation=270 ! multifilesink location=" + FramePath() +
         " max-files=1 post-messages=false";
 
     if (!Spawn(pipeline, &stream_pid_)) return false;
@@ -205,8 +204,7 @@ bool CameraManager::Start() {
             " ! video/x-raw,format=NV12,width=" + std::to_string(width_) +
             ",height=" + std::to_string(height_) +
             ",framerate=" + std::to_string(framerate_) + "/1" +
-            " ! videoflip method=counterclockwise" +
-            " ! mppjpegenc ! multifilesink location=" + FramePath() +
+            " ! mppjpegenc rotation=270 ! multifilesink location=" + FramePath() +
             " max-files=1 post-messages=false";
         if (!Spawn(pipeline_retry, &stream_pid_)) return false;
         for (int i = 0; i < 30 && IsAlive(stream_pid_) && !HasFrame(); ++i)
@@ -250,7 +248,7 @@ std::string CameraManager::TakeSnapshot() {
             " num-buffers=1 ! video/x-raw,format=NV12,width=" +
             std::to_string(width_) + ",height=" + std::to_string(height_) +
             ",framerate=" + std::to_string(framerate_) + "/1" +
-            " ! mppjpegenc ! filesink location=" + path;
+            " ! mppjpegenc rotation=270 ! filesink location=" + path;
 
         std::string cmd = std::string("/bin/sh -c \"") + pipeline + "\"";
         if (std::system(cmd.c_str()) != 0) {
@@ -306,8 +304,7 @@ std::string CameraManager::TakeSnapshotBase64() {
             " num-buffers=1 ! video/x-raw,format=NV12,width=" +
             std::to_string(width_) + ",height=" + std::to_string(height_) +
             ",framerate=" + std::to_string(framerate_) + "/1" +
-            " ! videoflip method=counterclockwise" +
-            " ! mppjpegenc ! filesink location=" + tmp;
+            " ! mppjpegenc rotation=270 ! filesink location=" + tmp;
         std::string cmd = std::string("/bin/sh -c \"") + pipeline + "\"";
         bool snap_ok = (std::system(cmd.c_str()) == 0);
         if (snap_ok) {
@@ -363,8 +360,7 @@ std::string CameraManager::StartRecord() {
         " ! video/x-raw,format=NV12,width=" + std::to_string(width_) +
         ",height=" + std::to_string(height_) +
         ",framerate=" + std::to_string(framerate_) + "/1" +
-        " ! videoflip method=counterclockwise" +
-        " ! mpph264enc ! h264parse ! mp4mux faststart=true" +
+        " ! mpph264enc rotation=270 ! h264parse ! mp4mux faststart=true" +
         " ! filesink location=" + path;
 
     if (!Spawn(pipeline, &record_pid_)) return "";
