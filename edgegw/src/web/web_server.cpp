@@ -73,6 +73,9 @@ void HttpHandler(struct mg_connection* c, int ev, void* ev_data) {
         }
         const std::string topic = "iotgw/v1/dev/mcu01/cmd";
         std::string payload(hm->body.buf, hm->body.len);
+        std::printf("[web] control: %zu bytes, transport=%s\n",
+                    payload.size(),
+                    (ctx->transport != nullptr) ? ctx->transport->c_str() : "?");
 
         // ① 按当前通讯方式下发命令
         bool ok = true;
@@ -233,7 +236,18 @@ void HttpHandler(struct mg_connection* c, int ev, void* ev_data) {
 
     // ---------- 通讯方式切换 ----------
     if (mg_match(hm->uri, mg_str("/api/transport"), nullptr)) {
-        if (ctx->transport == nullptr || !IsPost(hm)) {
+        if (ctx->transport == nullptr) {
+            mg_http_reply(c, 400, "Content-Type: application/json\r\n",
+                          "{\"ok\":false,\"error\":\"bad_request\"}");
+            return;
+        }
+        // GET: 查询当前通讯方式 (Web/Qt 同步显示用)
+        if (IsGet(hm)) {
+            mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+                          "{\"transport\":\"%s\"}", ctx->transport->c_str());
+            return;
+        }
+        if (!IsPost(hm)) {
             mg_http_reply(c, 400, "Content-Type: application/json\r\n",
                           "{\"ok\":false,\"error\":\"bad_request\"}");
             return;
@@ -243,6 +257,12 @@ void HttpHandler(struct mg_connection* c, int ev, void* ev_data) {
             *ctx->transport = "zigbee";
         } else {
             *ctx->transport = "mqtt";
+        }
+        // 双端同步: WS 推送 transport 状态 (Web/Qt 即时更新显示)
+        if (ctx->ws != nullptr) {
+            const std::string msg =
+                "{\"transport\":\"" + *ctx->transport + "\"}";
+            ctx->ws->Broadcast(msg);
         }
         mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                       "{\"ok\":true,\"transport\":\"%s\"}",

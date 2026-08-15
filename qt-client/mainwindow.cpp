@@ -161,6 +161,8 @@ void MainWindow::buildUi() {
     ledBr_ = new QSlider(Qt::Horizontal);
     ledBr_->setRange(0, 100);
     ledBr_->setValue(50);
+    ledBr_->setFixedHeight(60);   // 触摸友好
+    ledBr_->setPageStep(10);      // 点击轨道跳 10%
     connect(ledSw_, &QCheckBox::toggled, this, &MainWindow::sendLed);
     // 松手才发 (拖动过程不发, 避免命令风暴导致单片机缓冲溢出丢命令)
     connect(ledBr_, &QSlider::sliderReleased, this, &MainWindow::sendLed);
@@ -172,6 +174,8 @@ void MainWindow::buildUi() {
     motorSp_ = new QSlider(Qt::Horizontal);
     motorSp_->setRange(0, 100);
     motorSp_->setValue(30);
+    motorSp_->setFixedHeight(60);   // 触摸友好
+    motorSp_->setPageStep(10);      // 点击轨道跳 10%
     dirF_ = new QPushButton("正向旋转");
     dirR_ = new QPushButton("反向旋转");
     dirF_->setObjectName("dirActive");
@@ -193,6 +197,8 @@ void MainWindow::buildUi() {
     servoAg_ = new QSlider(Qt::Horizontal);
     servoAg_->setRange(0, 180);
     servoAg_->setValue(90);
+    servoAg_->setFixedHeight(60);   // 触摸友好
+    servoAg_->setPageStep(20);      // 点击轨道跳 20°
     servoVal_ = new QLabel("90°");
     servoVal_->setObjectName("sensorValue");
     connect(servoAg_, &QSlider::valueChanged, [this](int v) {
@@ -254,10 +260,10 @@ void MainWindow::buildUi() {
             background: #5c67f2;
             border-color: #5c67f2;
         }
-        QSlider::groove:horizontal { height: 6px; background: #e2e8f0;
-            border-radius: 3px; }
-        QSlider::handle:horizontal { width: 18px; margin: -7px 0;
-            background: #5c67f2; border-radius: 9px; }
+        QSlider::groove:horizontal { height: 10px; background: #e2e8f0;
+            border-radius: 5px; }
+        QSlider::handle:horizontal { width: 56px; margin: -23px 0;
+            background: #5c67f2; border-radius: 28px; }
         QPushButton { background: #e2e8f0; color: #64748b; border: none;
             border-radius: 8px; padding: 8px 14px; font-weight: 600; }
         QPushButton#dirActive { background: #5c67f2; color: white; }
@@ -456,12 +462,18 @@ void MainWindow::sendTransport(const QString& transport) {
     QJsonObject body;
     body["transport"] = transport;
     postJson("/api/transport", body);
-    btnMqtt_->setObjectName(transport == "mqtt" ? "linkBtnActive" : "");
-    btnZigbee_->setObjectName(transport == "zigbee" ? "linkBtnActive" : "");
-    style()->unpolish(btnMqtt_); style()->polish(btnMqtt_);
-    style()->unpolish(btnZigbee_); style()->polish(btnZigbee_);
+    updateTransportUi(transport);
     addLog(QString("通讯方式切换: %1")
         .arg(transport == "mqtt" ? "MQTT (WiFi 直连)" : "Zigbee (DL-30)"));
+}
+
+// MQTT/Zigbee 按钮高亮 (本端切换 + 其他端切换同步都用)
+void MainWindow::updateTransportUi(const QString& transport) {
+    const bool zig = (transport == "zigbee");
+    btnMqtt_->setObjectName(zig ? "" : "linkBtnActive");
+    btnZigbee_->setObjectName(zig ? "linkBtnActive" : "");
+    style()->unpolish(btnMqtt_); style()->polish(btnMqtt_);
+    style()->unpolish(btnZigbee_); style()->polish(btnZigbee_);
 }
 
 // ------------------------------------------------------------------
@@ -513,6 +525,20 @@ void MainWindow::refreshStatus() {
                 updateSensor(dev);
                 break;
             }
+        }
+    });
+
+    // transport 同步: 其他端 (Web) 切换通讯方式时, Qt 按钮高亮跟着变
+    QNetworkRequest treq(QUrl(apiBase_ + "/api/transport"));
+    QNetworkReply* treply = mgr_->get(treq);
+    connect(treply, &QNetworkReply::finished, this, [this, treply]() {
+        treply->deleteLater();
+        if (treply->error() != QNetworkReply::NoError) return;
+        const QJsonDocument tdoc = QJsonDocument::fromJson(treply->readAll());
+        if (!tdoc.isObject()) return;
+        const QString t = tdoc.object().value("transport").toString();
+        if (t == "mqtt" || t == "zigbee") {
+            updateTransportUi(t);
         }
     });
 }

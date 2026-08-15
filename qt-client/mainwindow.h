@@ -40,6 +40,7 @@ private:
     void updateSensor(const QJsonObject& dev);
     void postJson(const QString& path, const QJsonObject& body);
     QJsonObject buildCmd(const QString& target, const QJsonObject& params);
+    void updateTransportUi(const QString& transport);   // MQTT/Zigbee 按钮高亮
 
     // 网络
     QString server_;

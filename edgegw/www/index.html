@@ -525,6 +525,17 @@ function connectWS() {
     ws.onmessage = (e) => {
         try {
             const data = JSON.parse(e.data);
+            // transport 同步消息 (切换通讯方式时网关推送, 双端即时同步)
+            if (data.transport && !data.devices) {
+                if (data.transport !== currentLink) {
+                    currentLink = data.transport;
+                    document.querySelectorAll('#linkSwitch button').forEach(b => {
+                        b.classList.toggle('active', b.dataset.link === currentLink);
+                    });
+                    addLog(`⚠️ 通讯方式已由其他端切换: ${currentLink === 'mqtt' ? 'MQTT' : 'Zigbee'}`);
+                }
+                return;
+            }
             renderStatus(data);
         } catch (err) {
             addLog('⚠️ 推送数据解析失败');
@@ -546,7 +557,8 @@ function renderStatus(data) {
 
     document.getElementById('val_temp').innerText = (dev.temp !== undefined) ? dev.temp.toFixed(1) : '--';
     document.getElementById('val_humi').innerText = (dev.humi !== undefined) ? dev.humi.toFixed(1) : '--';
-    document.getElementById('val_light').innerText = (dev.light !== undefined) ? dev.light : '--';
+    // 光照: 传感器电路反向 (挡光时 ADC 值变大), 反转显示为强度 (0-4095, 挡光变小)
+    document.getElementById('val_light').innerText = (dev.light !== undefined) ? (4095 - dev.light) : '--';
 
     const irBox = document.getElementById('val_ir');
     if (dev.ir !== undefined) {
@@ -775,6 +787,21 @@ function toggleFullscreen() {
     }
 }
 
+// ========== transport 同步 (Qt 切换时 Web 显示跟着变) ==========
+async function syncTransport() {
+    try {
+        const resp = await fetch('/api/transport');
+        const data = await resp.json();
+        if (data.transport && data.transport !== currentLink) {
+            currentLink = data.transport;
+            document.querySelectorAll('#linkSwitch button').forEach(b => {
+                b.classList.toggle('active', b.dataset.link === currentLink);
+            });
+            addLog(`⚠️ 通讯方式已由其他端切换: ${currentLink === 'mqtt' ? 'MQTT' : 'Zigbee'}`);
+        }
+    } catch (err) { /* 忽略 */ }
+}
+
 // ========== 事件绑定 ==========
 streamStartBtn.onclick = startStream;
 streamStopBtn.onclick = stopStream;
@@ -785,6 +812,8 @@ fullscreenBtn.onclick = toggleFullscreen;
 // ========== 初始化 ==========
 connectWS();
 setInterval(pollStatus, 3000);
+syncTransport();                    // 同步当前通讯方式显示 (其他端切换时)
+setInterval(syncTransport, 5000);
 addLog('[系统] 页面加载完成，设备控制就绪');
 
     </script>
