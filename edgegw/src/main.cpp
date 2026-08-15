@@ -30,7 +30,9 @@
 #include "web/websocket_server.hpp"
 
 #include <csignal>
+#include <ctime>
 #include <deque>
+#include <mutex>
 #include <set>
 #include <string>
 #include <unistd.h>
@@ -79,6 +81,35 @@ bool IsDuplicateSensor(const std::string& dev, const std::string& msg_id) {
 }
 
 // ------------------------------------------------------------------
+// 红外遮挡报警: ir 从 0→1 (遮挡) 下发蜂鸣器报警, 1→0 解除
+// 按当前 transport 通道下发 (MQTT 或 Zigbee)
+// ------------------------------------------------------------------
+void SendAlarmCmd(bool alarm) {
+    char msg[192];
+    snprintf(msg, sizeof(msg),
+        "{\"type\":\"cmd\",\"dev\":\"mcu01\",\"msg_id\":\"alarm-%s-%ld\","
+        "\"ts\":0,\"body\":{\"target\":\"beep\",\"action\":\"set\","
+        "\"params\":{\"on\":%d}}}",
+        alarm ? "on" : "off",
+        static_cast<long>(std::time(nullptr)),
+        alarm ? 1 : 0);
+    const std::string payload(msg);
+    const std::string topic = "iotgw/v1/dev/mcu01/cmd";
+
+    if (g_transport == "zigbee" && g_zigbee.IsOpen()) {
+        g_zigbee.Send(payload);
+        edgegw::logger::Logger::Info(
+            std::string("[alarm] ") + (alarm ? "遮挡报警! Zigbee下发蜂鸣器ON"
+                                             : "遮挡解除. Zigbee下发蜂鸣器OFF"));
+    } else {
+        g_mqtt.Publish(topic, payload, 1);
+        edgegw::logger::Logger::Info(
+            std::string("[alarm] ") + (alarm ? "遮挡报警! MQTT下发蜂鸣器ON"
+                                             : "遮挡解除. MQTT下发蜂鸣器OFF"));
+    }
+}
+
+// ------------------------------------------------------------------
 // 处理一条解析成功的设备消息
 // 职责: 更新设备状态表 + 写入历史数据库 + WebSocket 推送
 // ------------------------------------------------------------------
@@ -94,6 +125,22 @@ void HandleSensorMessage(const edgegw::device::SensorData& data) {
     // 2. 写入历史数据库 (仅传感器数据, ACK/状态不落库)
     if (data.type == "sensor") {
         g_db.InsertTelemetry(data);
+    }
+
+    // 2.5 红外遮挡报警 (ir 变化沿触发, 防抖: 只在 0↔1 跳变时下发)
+    if (data.type == "sensor" && data.has_ir) {
+        static int prev_ir = -1;
+        static std::mutex alarm_mutex;
+        std::lock_guard<std::mutex> lock(alarm_mutex);
+        const int cur_ir = (data.ir > 0) ? 1 : 0;
+        if (prev_ir != cur_ir) {
+            if (cur_ir == 1) {
+                SendAlarmCmd(true);     // 遮挡 → 报警
+            } else if (prev_ir == 1) {
+                SendAlarmCmd(false);    // 解除 → 停
+            }
+            prev_ir = cur_ir;
+        }
     }
 
     // 3. WebSocket 推送 (数据变化实时推给 Web/Qt 实现双端同步)
@@ -136,9 +183,18 @@ void OnMqttMessage(const edgegw::mqtt::Message& message) {
 // Zigbee 串口行回调 (DL-30 透传, 与 MQTT 同 JSON 格式)
 // ------------------------------------------------------------------
 void OnZigbeeLine(const std::string& line) {
+    // 去掉前导控制字符 (DL-30 上电/串口残留的 \x00/\r/\n/空格)
+    size_t start = 0;
+    while (start < line.size() && (line[start] == '\x00' ||
+           line[start] == '\r' || line[start] == '\n' || line[start] == ' ')) {
+        start++;
+    }
+    std::string clean = line.substr(start);
+    if (clean.empty()) return;
+
     edgegw::device::SensorData data;
-    if (!edgegw::device::ParseSensorJson(line, data)) {
-        edgegw::logger::Logger::Warn("[zigbee] 解析失败: " + line);
+    if (!edgegw::device::ParseSensorJson(clean, data)) {
+        edgegw::logger::Logger::Warn("[zigbee] 解析失败: " + clean);
         return;
     }
     HandleSensorMessage(data);
