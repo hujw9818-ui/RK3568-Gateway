@@ -30,8 +30,10 @@
 #include "web/websocket_server.hpp"
 
 #include <csignal>
-#include <unistd.h>
+#include <deque>
+#include <set>
 #include <string>
+#include <unistd.h>
 
 namespace {
 
@@ -53,10 +55,39 @@ edgegw::serial::ZigbeeSerial g_zigbee;       // Zigbee 串口 (DL-30 透传)
 std::string g_transport = "mqtt";
 
 // ------------------------------------------------------------------
+// 消息去重: 单片机 send_dual 同一条传感器数据同时走 MQTT + Zigbee,
+// 两个入口都会到 HandleSensorMessage。按 dev+msg_id 去重 (FIFO 淘汰)。
+// 只对 sensor (report) 去重: ack/status 的 msg_id 可能固定 (on/off), 不去重
+// ------------------------------------------------------------------
+std::mutex g_dedup_mutex;
+std::set<std::string> g_dedup_set;
+std::deque<std::string> g_dedup_order;
+constexpr size_t kDedupMax = 256;
+
+bool IsDuplicateSensor(const std::string& dev, const std::string& msg_id) {
+    if (msg_id.empty()) return false;
+    std::lock_guard<std::mutex> lock(g_dedup_mutex);
+    const std::string key = dev + ":" + msg_id;
+    if (g_dedup_set.count(key) != 0) return true;
+    g_dedup_set.insert(key);
+    g_dedup_order.push_back(key);
+    if (g_dedup_order.size() > kDedupMax) {
+        g_dedup_set.erase(g_dedup_order.front());
+        g_dedup_order.pop_front();
+    }
+    return false;
+}
+
+// ------------------------------------------------------------------
 // 处理一条解析成功的设备消息
 // 职责: 更新设备状态表 + 写入历史数据库 + WebSocket 推送
 // ------------------------------------------------------------------
 void HandleSensorMessage(const edgegw::device::SensorData& data) {
+    // 0. 去重: 双通道同一条 sensor 消息只处理一次
+    if (data.type == "sensor" && IsDuplicateSensor(data.dev_id, data.msg_id)) {
+        return;
+    }
+
     // 1. 更新设备状态表 (最新值)
     g_registry.UpdateSensor(data);
 

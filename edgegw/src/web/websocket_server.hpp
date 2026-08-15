@@ -7,6 +7,8 @@
 #ifndef EDGEGW_WEB_WEBSOCKET_SERVER_HPP
 #define EDGEGW_WEB_WEBSOCKET_SERVER_HPP
 
+#include <deque>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -21,10 +23,10 @@ public:
     // 停止服务
     void Stop();
 
-    // 轮询事件 (主循环调用)
+    // 轮询事件 (主循环调用); 同时把广播队列发出去
     void Poll(int timeout_ms);
 
-    // 向所有已连接客户端广播文本消息
+    // 向所有已连接客户端广播文本消息 (线程安全: 仅入队, 主线程发送)
     void Broadcast(const std::string& message);
 
     // 当前连接数
@@ -33,6 +35,8 @@ public:
 private:
     void* mgr_ = nullptr;              // struct mg_mgr*
     std::vector<void*> clients_;       // 已连接的 WS 连接 (mg_connection*)
+    std::deque<std::string> pending_msgs_;   // 广播队列 (跨线程入队)
+    std::mutex pending_mutex_;               // 队列锁
 };
 
 }  // namespace web

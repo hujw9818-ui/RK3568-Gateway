@@ -102,6 +102,10 @@ void WebSocketServer::Stop() {
         std::lock_guard<std::mutex> lock(g_clients_mutex);
         clients_.clear();
     }
+    {
+        std::lock_guard<std::mutex> lock(pending_mutex_);
+        pending_msgs_.clear();   // 清空未发送的广播
+    }
     auto* mgr = static_cast<struct mg_mgr*>(mgr_);
     mg_mgr_free(mgr);
     delete mgr;
@@ -111,24 +115,43 @@ void WebSocketServer::Stop() {
 }
 
 // ------------------------------------------------------------
-// 轮询事件
+// 轮询事件; 同时把广播队列中的消息发送出去
+// (mongoose 连接操作必须在 mg_mgr_poll 同一线程, 队列保证跨线程安全)
 // ------------------------------------------------------------
 void WebSocketServer::Poll(int timeout_ms) {
     if (mgr_ == nullptr) {
         return;
     }
     mg_mgr_poll(static_cast<struct mg_mgr*>(mgr_), timeout_ms);
+
+    // 取出广播批次 (跨线程入队 → 主线程发送)
+    std::deque<std::string> batch;
+    {
+        std::lock_guard<std::mutex> lock(pending_mutex_);
+        batch.swap(pending_msgs_);
+    }
+    if (batch.empty()) return;
+
+    std::lock_guard<std::mutex> lock(g_clients_mutex);
+    for (const auto& msg : batch) {
+        for (auto* c : clients_) {
+            auto* conn = static_cast<struct mg_connection*>(c);
+            if (conn->is_closing) continue;   // 跳过即将关闭的连接
+            mg_ws_send(conn, msg.c_str(), msg.size(), WEBSOCKET_OP_TEXT);
+        }
+    }
 }
 
 // ------------------------------------------------------------
-// 向所有客户端广播
+// 广播: 线程安全入队 (MQTT/Zigbee 线程可调用, 发送由主线程 Poll 执行)
 // ------------------------------------------------------------
 void WebSocketServer::Broadcast(const std::string& message) {
-    std::lock_guard<std::mutex> lock(g_clients_mutex);
-    for (auto* c : clients_) {
-        mg_ws_send(static_cast<struct mg_connection*>(c), message.c_str(),
-                   message.size(), WEBSOCKET_OP_TEXT);
+    std::lock_guard<std::mutex> lock(pending_mutex_);
+    // 限流: 生产快于消费时丢弃最老消息, 防止内存膨胀
+    if (pending_msgs_.size() >= 256) {
+        pending_msgs_.pop_front();
     }
+    pending_msgs_.push_back(message);
 }
 
 // ------------------------------------------------------------

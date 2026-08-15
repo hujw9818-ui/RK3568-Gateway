@@ -314,6 +314,53 @@ void MainWindow::updateSensor(const QJsonObject& dev) {
             servoVal_->setText(QString::number(a) + "°");
         }
     }
+    // ---- 补全回显: LED 亮度 / 风扇 / 蜂鸣器 ----
+    if (dev.contains("led_brightness")) {
+        const int b = dev.value("led_brightness").toInt();
+        const bool recent = (now - lastCmdTime_.value("led", 0)) < 2000;
+        if (!recent && ledBr_->value() != b) {
+            ledBr_->blockSignals(true);
+            ledBr_->setValue(b);
+            ledBr_->blockSignals(false);
+        }
+    }
+    if (dev.contains("fan_on")) {
+        const bool on = dev.value("fan_on").toBool();
+        const bool recent = (now - lastCmdTime_.value("fan", 0)) < 2000;
+        if (!recent && motorSw_->isChecked() != on) {
+            motorSw_->blockSignals(true);
+            motorSw_->setChecked(on);
+            motorSw_->blockSignals(false);
+        }
+    }
+    if (dev.contains("fan_speed")) {
+        const int s = dev.value("fan_speed").toInt();
+        const bool recent = (now - lastCmdTime_.value("fan", 0)) < 2000;
+        if (!recent && motorSp_->value() != s) {
+            motorSp_->blockSignals(true);
+            motorSp_->setValue(s);
+            motorSp_->blockSignals(false);
+        }
+    }
+    if (dev.contains("fan_dir")) {
+        const int d = dev.value("fan_dir").toInt();
+        const bool recent = (now - lastCmdTime_.value("fan", 0)) < 2000;
+        if (!recent) {
+            dirF_->setObjectName(d == 0 ? "dirActive" : "");
+            dirR_->setObjectName(d == 1 ? "dirActive" : "");
+            style()->unpolish(dirF_); style()->polish(dirF_);
+            style()->unpolish(dirR_); style()->polish(dirR_);
+        }
+    }
+    if (dev.contains("beep_on")) {
+        const bool on = dev.value("beep_on").toBool();
+        const bool recent = (now - lastCmdTime_.value("beep", 0)) < 2000;
+        if (!recent && buzzerSw_->isChecked() != on) {
+            buzzerSw_->blockSignals(true);
+            buzzerSw_->setChecked(on);
+            buzzerSw_->blockSignals(false);
+        }
+    }
 }
 
 // ------------------------------------------------------------------
@@ -341,8 +388,21 @@ void MainWindow::postJson(const QString& path, const QJsonObject& body) {
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     QNetworkReply* reply = mgr_->post(
         req, QJsonDocument(body).toJson(QJsonDocument::Compact));
-    connect(reply, &QNetworkReply::finished, this, [reply]() {
+    // 读结果: 失败/ok=false 时记录错误 (成功由 sendXxx 记录操作日志)
+    connect(reply, &QNetworkReply::finished, this, [this, reply, path]() {
         reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            addLog(QString("❌ %1 请求失败: %2").arg(path, reply->errorString()));
+            return;
+        }
+        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+        if (doc.isObject()) {
+            const QJsonObject obj = doc.object();
+            if (obj.contains("ok") && !obj.value("ok").toBool()) {
+                addLog(QString("❌ %1 失败: %2")
+                    .arg(path, obj.value("error").toString("未知错误")));
+            }
+        }
     });
 }
 
