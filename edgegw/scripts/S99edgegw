@@ -1,0 +1,20 @@
+#!/bin/sh
+# ==================================================================
+# 开机自启: mosquitto broker + edgegw 网关服务
+# 顺序: mosquitto 先起, edgegw 后起 (依赖 broker)
+# ==================================================================
+case "$1" in
+  start)
+    echo "[S99edgegw] 启动 mosquitto broker..."
+    nohup mosquitto -c /etc/mosquitto/edgegw.conf -d > /tmp/mosquitto.log 2>&1 &
+    sleep 2
+    echo "[S99edgegw] 启动 edgegw 网关..."
+    cd /opt/edgegw
+    nohup ./edgegw /opt/edgegw/development.yaml > /tmp/edgegw.log 2>&1 &
+    echo "[S99edgegw] edgegw 已启动 (pid $!)"
+    ;;
+  stop)
+    killall edgegw 2>/dev/null
+    killall mosquitto 2>/dev/null
+    ;;
+esac

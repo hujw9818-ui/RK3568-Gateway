@@ -1,0 +1,18 @@
+#!/bin/sh
+# ==================================================================
+# 开机自启: Qt 客户端 (wayland 平台, 依赖 weston 已启动)
+# 序号 S99qtclient: 在 S99edgegw 之后 (字母序 e<q), edgegw 先就绪
+# ==================================================================
+case "$1" in
+  start)
+    echo "[S99qtclient] 启动 Qt 客户端..."
+    export XDG_RUNTIME_DIR=/run
+    export QT_QPA_PLATFORM=wayland
+    sleep 2   # 等 edgegw HTTP 服务就绪
+    nohup /opt/edgegw/qt-client > /tmp/qt.log 2>&1 &
+    echo "[S99qtclient] Qt 已启动 (pid $!)"
+    ;;
+  stop)
+    killall qt-client 2>/dev/null
+    ;;
+esac

@@ -1,0 +1,15 @@
+#!/bin/sh
+# ==================================================================
+# 开机自启: weston 桌面 (wayland 合成器, Mali-G52 GPU 加速)
+# Qt 上位机依赖 wayland 平台
+# ==================================================================
+case "$1" in
+  start)
+    echo "[S50launcher] 启动 weston 桌面..."
+    nohup weston --config=/tmp/.weston_drm.conf > /tmp/weston.log 2>&1 &
+    echo "[S50launcher] weston 已启动 (pid $!)"
+    ;;
+  stop)
+    killall weston 2>/dev/null
+    ;;
+esac
