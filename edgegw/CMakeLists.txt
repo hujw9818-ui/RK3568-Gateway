@@ -53,6 +53,8 @@ target_link_libraries(edgegw PRIVATE
   mosquitto        # buildroot: libmosquitto (MQTT 客户端)
   yaml-cpp         # buildroot: libyaml-cpp (配置解析)
   sqlite3          # buildroot: libsqlite3 (数据库)
+  spdlog           # buildroot: libspdlog (日志)
+  fmt              # buildroot: libfmt (spdlog 依赖)
 )
 
 # ---------- 交叉编译时自动指向 buildroot sysroot ----------

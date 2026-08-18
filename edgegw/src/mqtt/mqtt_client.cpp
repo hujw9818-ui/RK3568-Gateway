@@ -16,17 +16,22 @@ bool MqttClient::Start(const Options& options) {
   std::lock_guard<std::mutex> lock(mutex_);
 
   if (started_) {
+    std::cerr << "[mqtt] already started\n";
     return false;
   }
 
   if (options.host.empty() || options.port <= 0 || options.port > 65535 ||
       options.keep_alive_seconds <= 0 || options.client_id.empty()) {
+    std::cerr << "[mqtt] invalid options: host=" << options.host
+              << " port=" << options.port
+              << " keepalive=" << options.keep_alive_seconds
+              << " client_id=" << options.client_id << '\n';
     return false;
   }
 
-  // libmosquitto 是 C 库，使用前必须初始化一次全局库状态。
   const int init_rc = mosquitto_lib_init();
   if (init_rc != MOSQ_ERR_SUCCESS) {
+    std::cerr << "[mqtt] mosquitto_lib_init failed, rc=" << init_rc << '\n';
     return false;
   }
   library_initialized_ = true;
@@ -35,16 +40,17 @@ bool MqttClient::Start(const Options& options) {
   mosq_ = mosquitto_new(options_.client_id.c_str(), options_.clean_session,
                         this);
   if (mosq_ == nullptr) {
+    std::cerr << "[mqtt] mosquitto_new failed, errno=" << errno << '\n';
     mosquitto_lib_cleanup();
     library_initialized_ = false;
     return false;
   }
 
-  // 用户名和密码为空时不调用此函数，适配实验环境的匿名 MQTT。
   if (!options_.username.empty()) {
     const int auth_rc = mosquitto_username_pw_set(
         mosq_, options_.username.c_str(), options_.password.c_str());
     if (auth_rc != MOSQ_ERR_SUCCESS) {
+      std::cerr << "[mqtt] username_pw_set failed, rc=" << auth_rc << '\n';
       mosquitto_destroy(mosq_);
       mosq_ = nullptr;
       mosquitto_lib_cleanup();
@@ -57,11 +63,12 @@ bool MqttClient::Start(const Options& options) {
   mosquitto_disconnect_callback_set(mosq_, &MqttClient::OnDisconnect);
   mosquitto_message_callback_set(mosq_, &MqttClient::OnMessage);
 
-  // 使用异步连接，真正的网络收发由 loop_start 创建的线程负责。
   const int connect_rc = mosquitto_connect_async(
       mosq_, options_.host.c_str(), options_.port,
       options_.keep_alive_seconds);
   if (connect_rc != MOSQ_ERR_SUCCESS) {
+    std::cerr << "[mqtt] connect_async failed, rc=" << connect_rc
+              << " (" << mosquitto_strerror(connect_rc) << ")\n";
     mosquitto_destroy(mosq_);
     mosq_ = nullptr;
     mosquitto_lib_cleanup();
@@ -71,6 +78,7 @@ bool MqttClient::Start(const Options& options) {
 
   const int loop_rc = mosquitto_loop_start(mosq_);
   if (loop_rc != MOSQ_ERR_SUCCESS) {
+    std::cerr << "[mqtt] loop_start failed, rc=" << loop_rc << '\n';
     mosquitto_destroy(mosq_);
     mosq_ = nullptr;
     mosquitto_lib_cleanup();
@@ -92,7 +100,6 @@ void MqttClient::Stop() {
   connected_.store(false);
 
   if (started_) {
-    // false 表示让网络线程自然退出，函数会等待线程结束。
     mosquitto_disconnect(mosq_);
     mosquitto_loop_stop(mosq_, false);
     started_ = false;
@@ -128,13 +135,17 @@ bool MqttClient::Subscribe(const std::string& topic, int qos) {
     subscriptions_.emplace_back(topic, qos);
   }
 
-  // 未连接时只保存订阅，OnConnect 会自动补订阅。
   if (!started_ || !connected_.load() || mosq_ == nullptr) {
     return true;
   }
 
   const int rc = mosquitto_subscribe(mosq_, nullptr, topic.c_str(), qos);
-  return rc == MOSQ_ERR_SUCCESS;
+  if (rc != MOSQ_ERR_SUCCESS) {
+    std::cerr << "[mqtt] subscribe failed, topic=" << topic << " rc=" << rc
+              << '\n';
+    return false;
+  }
+  return true;
 }
 
 bool MqttClient::Publish(const std::string& topic, const std::string& payload,
@@ -182,12 +193,13 @@ void MqttClient::OnMessage(struct mosquitto* /*mosq*/, void* userdata,
 void MqttClient::HandleConnect(int rc) {
   if (rc != MOSQ_ERR_SUCCESS) {
     connected_.store(false);
-    std::cerr << "MQTT connect failed, rc=" << rc << '\n';
+    std::cerr << "[mqtt] connect failed, rc=" << rc
+              << " (" << mosquitto_strerror(rc) << ")\n";
     return;
   }
 
   connected_.store(true);
-  std::cout << "MQTT connected to " << options_.host << ':' << options_.port
+  std::cout << "[mqtt] connected to " << options_.host << ':' << options_.port
             << '\n';
   SubscribeAll();
 }
@@ -195,9 +207,9 @@ void MqttClient::HandleConnect(int rc) {
 void MqttClient::HandleDisconnect(int rc) {
   connected_.store(false);
   if (rc != MOSQ_ERR_SUCCESS) {
-    std::cerr << "MQTT disconnected unexpectedly, rc=" << rc << '\n';
+    std::cerr << "[mqtt] disconnected unexpectedly, rc=" << rc << '\n';
   } else {
-    std::cout << "MQTT disconnected\n";
+    std::cout << "[mqtt] disconnected\n";
   }
 }
 
@@ -214,15 +226,14 @@ bool MqttClient::SubscribeAll() {
                                        subscription.second);
     if (rc != MOSQ_ERR_SUCCESS) {
       success = false;
-      std::cerr << "MQTT subscribe failed, topic=" << subscription.first
+      std::cerr << "[mqtt] subscribe failed, topic=" << subscription.first
                 << ", rc=" << rc << '\n';
     }
   }
   return success;
 }
 
-void MqttClient::HandleMessage(
-    const struct mosquitto_message* message) {
+void MqttClient::HandleMessage(const struct mosquitto_message* message) {
   if (message == nullptr || message->topic == nullptr ||
       message->payload == nullptr || message->payloadlen < 0) {
     return;
@@ -245,9 +256,6 @@ void MqttClient::HandleMessage(
   received.qos = message->qos;
   received.retained = message->retain != 0;
 
-  // 注意：这里仍然运行在 MQTT 网络线程。
-  // 后续接入设备表和 SQLite 时，应在这里把 received 放进业务队列，
-  // 不要直接执行耗时的 JSON 解析或数据库写入。
   handler(received);
 }
 
