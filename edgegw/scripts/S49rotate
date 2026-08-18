@@ -1,0 +1,13 @@
+#!/bin/sh
+# ==================================================================
+# 开机自启: 屏幕旋转 (weston 旋转配置)
+# rockchip 定制 weston 用 /tmp/.weston_drm.conf (非标准 weston.ini)
+# ==================================================================
+case "$1" in
+  start)
+    echo "output:all:rotate270" > /tmp/.weston_drm.conf
+    echo "[S49rotate] 已写入旋转配置"
+    ;;
+  stop)
+    ;;
+esac
