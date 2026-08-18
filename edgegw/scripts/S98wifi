@@ -6,8 +6,8 @@
 # ==================================================================
 case "$1" in
   start)
-    SSID="HHH"
-    PASS="HJW12345678"
+    SSID="jang_phone"
+    PASS="12345678"
     echo "[S98wifi] 连接热点 $SSID ..."
 
     cat > /etc/wpa_supplicant.conf <<CFG
@@ -19,25 +19,55 @@ network={
 }
 CFG
 
-    killall wpa_supplicant 2>/dev/null
-    sleep 1
-    wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf
-    sleep 5
+    # rtl8723du 是 USB WiFi, 驱动注册时间不稳定 (实测 28 秒 ~ 120 秒),
+    # 前台等待不可靠。改为后台守护: 循环等 wlan0 出现 (最多 5 分钟), 出现就连接。
+    # S98wifi 本身立即返回, 不阻塞启动流程。
+    ( CNT=0
+      while [ ! -d /sys/class/net/wlan0 ] && [ $CNT -lt 300 ]; do
+          sleep 1
+          CNT=$((CNT+1))
+      done
+      if [ ! -d /sys/class/net/wlan0 ]; then
+          echo "[S98wifi] wlan0 5 分钟未出现, 放弃"
+          exit 1
+      fi
+      echo "[S98wifi] wlan0 就绪 (等了 ${CNT}s)"
 
-    STATE=$(wpa_cli -i wlan0 status 2>/dev/null | grep wpa_state | cut -d= -f2)
-    echo "[S98wifi] 状态: $STATE"
+      killall wpa_supplicant 2>/dev/null
+      sleep 1
+      wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf
+      sleep 5
 
-    if [ "$STATE" = "COMPLETED" ]; then
-        # -R: 不设置默认路由 (默认路由保持 eth0 网线, 防止回包走热点失联)
-        udhcpc -R -i wlan0 >/dev/null 2>&1
-        sleep 2
-        # 兜底: 万一 udhcpc 还是加了默认路由, 删掉 wlan0 的
-        route del default dev wlan0 2>/dev/null
-        IP=$(ifconfig wlan0 2>/dev/null | grep "inet addr" | awk '{print $2}' | cut -d: -f2)
-        echo "[S98wifi] 连接成功! WiFi IP: $IP (默认路由保持 eth0)"
-    else
-        echo "[S98wifi] 连接失败 (热点未开启?)"
-    fi
+      STATE=$(wpa_cli -i wlan0 status 2>/dev/null | grep wpa_state | cut -d= -f2)
+      echo "[S98wifi] 状态: $STATE"
+
+      if [ "$STATE" = "COMPLETED" ]; then
+          # -R: 不设置默认路由 (默认路由保持 eth0 网线, 防止回包走热点失联)
+          udhcpc -R -i wlan0 >/dev/null 2>&1
+          sleep 2
+          # 兜底: 万一 udhcpc 还是加了默认路由, 删掉 wlan0 的
+          route del default dev wlan0 2>/dev/null
+          IP=$(ifconfig wlan0 2>/dev/null | grep "inet addr" | awk '{print $2}' | cut -d: -f2)
+          echo "[S98wifi] 连接成功! WiFi IP: $IP (默认路由保持 eth0)"
+      else
+          echo "[S98wifi] 首次连接失败 (热点未开启?), wpa_supplicant 保持运行自动重连"
+          # 后台守护: 热点开了以后自动 DHCP + 修路由
+          CNT2=0
+          while [ $CNT2 -lt 240 ]; do
+              sleep 5
+              ST=$(wpa_cli -i wlan0 status 2>/dev/null | grep wpa_state | cut -d= -f2)
+              if [ "$ST" = "COMPLETED" ]; then
+                  udhcpc -R -i wlan0 >/dev/null 2>&1
+                  sleep 2
+                  route del default dev wlan0 2>/dev/null
+                  IP=$(ifconfig wlan0 2>/dev/null | grep "inet addr" | awk '{print $2}' | cut -d: -f2)
+                  echo "[S98wifi] 后台重连成功! WiFi IP: $IP"
+                  break
+              fi
+              CNT2=$((CNT2+1))
+          done
+      fi
+    ) &
     ;;
   stop)
     killall wpa_supplicant 2>/dev/null

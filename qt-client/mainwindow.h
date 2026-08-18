@@ -24,8 +24,6 @@ public:
 private slots:
     // 控制
     void sendLed();
-    void sendMotor();
-    void sendMotorDir(bool reverse);
     void sendServo();
     void sendBuzzer();
     void sendTransport(const QString& transport);
@@ -61,11 +59,6 @@ private:
     // 控制控件
     QCheckBox* ledSw_;
     QSlider* ledBr_;
-    QCheckBox* motorSw_;
-    QSlider* motorSp_;
-    QPushButton* dirF_;
-    QPushButton* dirR_;
-    int motorDir_ = 0;
     QSlider* servoAg_;
     QLabel* servoVal_;
     QCheckBox* buzzerSw_;

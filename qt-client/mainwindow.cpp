@@ -169,28 +169,6 @@ void MainWindow::buildUi() {
     clay->addWidget(ledSw_);
     clay->addWidget(ledBr_);
 
-    // 电机
-    motorSw_ = new QCheckBox("直流电机控制");
-    motorSp_ = new QSlider(Qt::Horizontal);
-    motorSp_->setRange(0, 100);
-    motorSp_->setValue(30);
-    motorSp_->setFixedHeight(60);   // 触摸友好
-    motorSp_->setPageStep(10);      // 点击轨道跳 10%
-    dirF_ = new QPushButton("正向旋转");
-    dirR_ = new QPushButton("反向旋转");
-    dirF_->setObjectName("dirActive");
-    auto* dirRow = new QHBoxLayout;
-    dirRow->addWidget(dirF_);
-    dirRow->addWidget(dirR_);
-    connect(motorSw_, &QCheckBox::toggled, this, &MainWindow::sendMotor);
-    // 松手才发 (避免命令风暴)
-    connect(motorSp_, &QSlider::sliderReleased, this, &MainWindow::sendMotor);
-    connect(dirF_, &QPushButton::clicked, [this]() { sendMotorDir(false); });
-    connect(dirR_, &QPushButton::clicked, [this]() { sendMotorDir(true); });
-    clay->addWidget(motorSw_);
-    clay->addWidget(motorSp_);
-    clay->addLayout(dirRow);
-
     // 舵机
     auto* servoRow = new QHBoxLayout;
     auto* servoName = new QLabel("舵机角度");
@@ -292,8 +270,11 @@ void MainWindow::updateSensor(const QJsonObject& dev) {
         valTemp_->setText(QString::number(dev.value("temp").toDouble(), 'f', 1));
     if (dev.contains("humi"))
         valHumi_->setText(QString::number(dev.value("humi").toDouble(), 'f', 1));
-    if (dev.contains("light"))
-        valLight_->setText(QString::number(dev.value("light").toDouble(), 'f', 0));
+    if (dev.contains("light")) {
+        // 光照: 传感器电路反向 (挡光时 ADC 值变大), 与 Web 端一致反转显示 (0-4095, 挡光变小)
+        double raw = dev.value("light").toDouble();
+        valLight_->setText(QString::number(4095 - raw, 'f', 0));
+    }
     if (dev.contains("ir")) {
         const bool has = dev.value("ir").toInt() != 0;
         valIr_->setText(has ? "有人" : "安全");
@@ -320,7 +301,7 @@ void MainWindow::updateSensor(const QJsonObject& dev) {
             servoVal_->setText(QString::number(a) + "°");
         }
     }
-    // ---- 补全回显: LED 亮度 / 风扇 / 蜂鸣器 ----
+    // ---- 补全回显: LED 亮度 / 蜂鸣器 ----
     if (dev.contains("led_brightness")) {
         const int b = dev.value("led_brightness").toInt();
         const bool recent = (now - lastCmdTime_.value("led", 0)) < 2000;
@@ -328,34 +309,6 @@ void MainWindow::updateSensor(const QJsonObject& dev) {
             ledBr_->blockSignals(true);
             ledBr_->setValue(b);
             ledBr_->blockSignals(false);
-        }
-    }
-    if (dev.contains("fan_on")) {
-        const bool on = dev.value("fan_on").toBool();
-        const bool recent = (now - lastCmdTime_.value("fan", 0)) < 2000;
-        if (!recent && motorSw_->isChecked() != on) {
-            motorSw_->blockSignals(true);
-            motorSw_->setChecked(on);
-            motorSw_->blockSignals(false);
-        }
-    }
-    if (dev.contains("fan_speed")) {
-        const int s = dev.value("fan_speed").toInt();
-        const bool recent = (now - lastCmdTime_.value("fan", 0)) < 2000;
-        if (!recent && motorSp_->value() != s) {
-            motorSp_->blockSignals(true);
-            motorSp_->setValue(s);
-            motorSp_->blockSignals(false);
-        }
-    }
-    if (dev.contains("fan_dir")) {
-        const int d = dev.value("fan_dir").toInt();
-        const bool recent = (now - lastCmdTime_.value("fan", 0)) < 2000;
-        if (!recent) {
-            dirF_->setObjectName(d == 0 ? "dirActive" : "");
-            dirR_->setObjectName(d == 1 ? "dirActive" : "");
-            style()->unpolish(dirF_); style()->polish(dirF_);
-            style()->unpolish(dirR_); style()->polish(dirR_);
         }
     }
     if (dev.contains("beep_on")) {
@@ -420,26 +373,6 @@ void MainWindow::sendLed() {
     lastCmdTime_["led"] = QDateTime::currentMSecsSinceEpoch();
     addLog(QString("LED: %1, 亮度 %2%")
         .arg(ledSw_->isChecked() ? "开" : "关").arg(ledBr_->value()));
-}
-
-void MainWindow::sendMotor() {
-    QJsonObject p;
-    p["on"] = motorSw_->isChecked() ? 1 : 0;
-    p["speed"] = motorSp_->value();
-    p["dir"] = motorDir_;
-    postJson("/api/control", buildCmd("fan", p));
-    lastCmdTime_["fan"] = QDateTime::currentMSecsSinceEpoch();
-}
-
-void MainWindow::sendMotorDir(bool reverse) {
-    motorDir_ = reverse ? 1 : 0;
-    dirF_->setObjectName(reverse ? "" : "dirActive");
-    dirR_->setObjectName(reverse ? "dirActive" : "");
-    // 重新应用样式
-    style()->unpolish(dirF_); style()->polish(dirF_);
-    style()->unpolish(dirR_); style()->polish(dirR_);
-    sendMotor();
-    addLog(QString("电机方向: %1").arg(reverse ? "反转" : "正转"));
 }
 
 void MainWindow::sendServo() {

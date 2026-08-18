@@ -431,16 +431,6 @@
                 </div>
 
                 <div class="control-item">
-                    <div class="label-row"><span>直流电机控制</span><label class="switch"><input type="checkbox" id="motor_sw"
-                                onchange="updateMotor()"><span class="slider"></span></label></div>
-                    <input type="range" id="motor_sp" value="30" onchange="updateMotor()">
-                    <div class="dir-btns">
-                        <button id="dir_f" class="btn-dir active" onclick="setMotorDirUser(0)">正向旋转</button>
-                        <button id="dir_r" class="btn-dir" onclick="setMotorDirUser(1)">反向旋转</button>
-                    </div>
-                </div>
-
-                <div class="control-item">
                     <div class="label-row"><span>舵机角度</span><span id="servo_ag_val"
                                 style="font-weight:800;color:var(--primary);">90°</span></div>
                     <input type="range" id="servo_ag" value="90" min="0" max="180"
@@ -474,7 +464,6 @@
 const WS_URL = 'ws://' + location.hostname + ':8082';      // WebSocket 实时推送
 
 // ========== 全局状态 ==========
-let currentDir = 0;
 let streamStarted = false;
 let recordStarted = false;
 let currentLink = 'mqtt';   // 当前通讯方式: mqtt / zigbee
@@ -568,9 +557,6 @@ function renderStatus(data) {
 
     document.getElementById('led_sw').checked = !!dev.led_on;
     if (dev.led_brightness !== undefined) document.getElementById('led_br').value = dev.led_brightness;
-    document.getElementById('motor_sw').checked = !!dev.fan_on;
-    if (dev.fan_speed !== undefined) document.getElementById('motor_sp').value = dev.fan_speed;
-    if (dev.fan_dir !== undefined) setMotorDirUI(dev.fan_dir);
     if (dev.servo_angle !== undefined) {
         document.getElementById('servo_ag').value = dev.servo_angle;
         document.getElementById('servo_ag_val').textContent = dev.servo_angle + '°';
@@ -618,29 +604,6 @@ function updateLed() {
     const br = parseInt(document.getElementById('led_br').value);
     addLog(`LED: ${sw ? '开启' : '关闭'}, 亮度 ${br}%`);
     sendControl('led', { on: sw ? 1 : 0, brightness: br });
-}
-
-// ========== 电机 ==========
-function updateMotor() {
-    const sw = document.getElementById('motor_sw').checked;
-    const sp = parseInt(document.getElementById('motor_sp').value);
-    sendControl('fan', { on: sw ? 1 : 0, speed: sp, dir: currentDir });
-}
-
-function setMotorDirUI(dir) {
-    currentDir = dir;
-    document.getElementById('dir_f').classList.toggle('active', dir === 0);
-    document.getElementById('dir_r').classList.toggle('active', dir === 1);
-}
-
-function setMotorDirUser(dir) {
-    setMotorDirUI(dir);
-    addLog(`电机方向: ${dir === 0 ? '正转' : '反转'}`);
-    sendControl('fan', {
-        on: document.getElementById('motor_sw').checked ? 1 : 0,
-        speed: parseInt(document.getElementById('motor_sp').value),
-        dir: dir
-    });
 }
 
 // ========== 蜂鸣器 ==========
